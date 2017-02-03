@@ -1,0 +1,124 @@
+#!/usr/bin/perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2017, SAFIRE - South African Identity Federation
+# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+#
+use strict;
+use warnings;
+use Monitoring::Plugin;
+use LWP::UserAgent;
+use HTTP::Status;
+use URI;
+use Date::Parse;
+use POSIX;
+use XML::LibXML;
+use XML::LibXML::XPathContext;
+
+my $np = Monitoring::Plugin->new(
+    'usage' => 'Usage: %s [ -v|--verbose ]  [-H <vhost>] [-I <address>] [-t <timeout>] [-u <url>]',
+    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'version' => '0.1',
+    'blurb' => "A simple plugin to check remote SAML metadata feeds",
+    'extra' => "
+There are a *lot* of features we'd like to add to this, most notably
+it should do xmldsig checking. We may get there eventually...
+",
+);
+$np->add_arg('spec' => 'url|u=s', 'help' => 'URL to fetch (default: /)', 'default' => '/',);
+$np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use for vhost', 'required' => 1);
+$np->add_arg('spec' => 'address|I=s', 'help' => 'IP address or name (use numeric address if possible to bypass DNS lookup).');
+$np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 80 or 443)',);
+$np->add_arg('spec' => 'ssl|S', 'help' => 'Use SSL');
+$np->add_arg('spec' => 'vw=i', 'help' => 'Warn if validty < vw days (default=2)', 'default' => 2);
+$np->add_arg('spec' => 'vc=i', 'help' => 'Critical if validty < vc days (default=1)', 'default' => 1);
+$np->add_arg('spec' => 'ew=i', 'help' => 'Warn if md:EntityDescriptor count < ew (default=10)', 'default' => 10);
+$np->add_arg('spec' => 'ec=i', 'help' => 'Critical if md:EntityDescriptor count < ec (default=5)', 'default' => 5);
+$np->add_arg('spec' => 'iw=i', 'help' => 'Warn if md:IDPSSODescriptor count < iw (default=1)', 'default' => 1);
+$np->add_arg('spec' => 'ic=i', 'help' => 'Critical if md:IDPSSODescriptor count < ic (default=0)', 'default' => 0);
+$np->add_arg('spec' => 'sw=i', 'help' => 'Warn if md:SPSSODescriptor count < sw (default=1)', 'default' => 1);
+$np->add_arg('spec' => 'sc=i', 'help' => 'Critical if md:SPSSODescriptor count < sc (default=0)', 'default' => 0);
+$np->add_arg('spec' => 'fw=i', 'help' => 'Warn if HTTP document expires < fw days (default=4)', 'default' => 4);
+$np->add_arg('spec' => 'fc=i', 'help' => 'Critical if HTTP document expires < fc days (default=4)', 'default' => 2);
+$np->getopts;
+
+my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
+my $uri = new URI(($np->opts->ssl ? 'https' : 'http') . '://' . ($np->opts->address ? $np->opts->address : $np->opts->host) . ':' . $port . $np->opts->url, $np->opts->ssl ? 'https' : 'http');
+
+print STDERR "Set URI to $uri\n" if $np->opts->verbose;
+
+my $ua = LWP::UserAgent->new;
+$ua->timeout($np->opts->timeout);
+my $res = $ua->get($uri, 'Host' => $np->opts->host);
+$np->plugin_die("Timeout!") if $res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+if (!$res->is_success()) {
+    $np->plugin_exit(CRITICAL, 'HTTP error ' . $res->code . ' ' . $res->message);
+}
+print STDERR "Got LWP response " . $res->code . "\n" if $np->opts->verbose;
+
+print STDERR "fresh_until=" . $res->fresh_until() . " (" . strftime('%FT%TZ',gmtime($res->fresh_until())) . ") fc=" . $np->opts->fc . " fw=" . $np->opts->fw . "\n" if $np->opts->verbose;
+if ($res->fresh_until() > time() + ($np->opts->fc * 86400)) {
+    $np->add_message(CRITICAL, "fresh_until=" . $res->fresh_until() . " > " . $np->opts->fc . " days");
+} elsif ($res->fresh_until() > time() + ($np->opts->fw * 86400)) {
+    $np->add_message(WARNING, "fresh_until=" . $res->fresh_until() . " > " . $np->opts->fw . " days");
+}
+
+my $xml = new XML::LibXML; my $dom;
+eval { $dom = $xml->load_xml('string' => $res->decoded_content); };
+if ( $@ ) { $np->plugin_exit(CRITICAL, 'Response is not well-formed XML'); }
+
+print STDERR "Response is well-formed XML\n" if $np->opts->verbose;
+
+my $xp = XML::LibXML::XPathContext->new($dom->getDocumentElement());
+$xp->registerNs('md', 'urn:oasis:names:tc:SAML:2.0:metadata');
+$xp->registerNs('shibmd', 'urn:mace:shibboleth:metadata:1.0');
+$xp->registerNs('mdui', 'urn:oasis:names:tc:SAML:metadata:ui');
+$xp->registerNs('ds', 'http://www.w3.org/2000/09/xmldsig#');
+$xp->registerNs('mdrpi', 'urn:oasis:names:tc:SAML:metadata:rpi');
+$xp->registerNs('mdattr', 'urn:oasis:names:tc:SAML:metadata:attribute');
+$xp->registerNs('saml', 'urn:oasis:names:tc:SAML:2.0:assertion');
+
+my ($validUntil) = $xp->findvalue('/md:EntitiesDescriptor/@validUntil');
+($validUntil) = $xp->findvalue('/md:EntityDescriptor/@validUntil') unless $validUntil;
+print STDERR "validUntil=$validUntil vc=" . $np->opts->vc . " vw=" . $np->opts->vw . "\n" if $np->opts->verbose;
+if (!$validUntil or str2time($validUntil) < time + ($np->opts->vc * 86400)) {
+    $np->add_message(CRITICAL, 'Metadata validUntil=' . $validUntil . ' < ' . $np->opts->vc . ' days');
+} elsif (str2time($validUntil) < time + ($np->opts->vw * 86400)) {
+    $np->add_message(WARNING, 'Metadata validUntil=' . $validUntil . ' < ' . $np->opts->vw . ' days');
+}
+
+my ($entities) = $xp->findvalue('count(//md:EntityDescriptor)');
+$entities+=0;
+print STDERR "count(md:EntityDescriptor)=$entities ec=" . $np->opts->ec . " ew=" . $np->opts->ew . "\n" if $np->opts->verbose;
+$np->add_perfdata('label' => 'entities', 'value' => $entities, 'min' => 0, 'warning' => $np->opts->ew, 'critical' => $np->opts->ec);
+if ($entities < $np->opts->ec) {
+    $np->add_message(CRITICAL, 'count(md:EntityDescriptor)=' . $entities . ' < ' . $np->opts->ec);
+} elsif ($entities < $np->opts->ew) {
+    $np->add_message(WARNING, 'count(md:EntityDescriptor)=' . $entities . ' < ' . $np->opts->ew);
+}
+
+my ($idps) = $xp->findvalue('count(//md:EntityDescriptor/md:IDPSSODescriptor)', $dom);
+$idps+=0;
+print STDERR "count(md:IDPSSODescriptor)=$idps ic=" . $np->opts->ic . " iw=" . $np->opts->iw . "\n" if $np->opts->verbose;
+$np->add_perfdata('label' => 'idps', 'value' => $idps, 'min' => 0, 'warning' => $np->opts->iw, 'critical' => $np->opts->ic);
+if ($idps < $np->opts->ic) {
+    $np->add_message(CRITICAL, 'count(md:IDPSSODescriptor)=' . $idps . ' < ' . $np->opts->ic);
+} elsif ($idps < $np->opts->iw) {
+    $np->add_message(WARNING, 'count(md:IDPSSODescriptor)=' . $idps . ' < ' . $np->opts->iw);
+}
+
+my ($sps) = $xp->findvalue('count(//md:EntityDescriptor/md:SPSSODescriptor)', $dom);
+print STDERR "count(md:SPSSODescriptor)=$sps sc=" . $np->opts->sc . " sw=" . $np->opts->sw . "\n" if $np->opts->verbose;
+$np->add_perfdata('label' => 'sps', 'value' => $sps, 'min' => 0, 'warning' => $np->opts->sw, 'critical' => $np->opts->sc);
+if ($sps < $np->opts->sc) {
+    $np->add_message(CRITICAL, 'count(md:SPSSODescriptor)=' . $sps . ' < ' . $np->opts->sc);
+} elsif ($sps < $np->opts->sw) {
+    $np->add_message(WARNING, 'count(md:SPSSODescriptor)=' . $sps . ' < ' . $np->opts->sw);
+}
+
+# All checks complete, return something
+my ($code, $message) = $np->check_messages();
+if ($code == OK) {
+    $np->plugin_exit(OK, "$entities entities {idp:$idps, sp:$sps}");
+} else {
+    $np->plugin_exit($code, $message);
+}
