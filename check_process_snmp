@@ -1,0 +1,154 @@
+#!/usr/bin/perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2017, SAFIRE - South African Identity Federation
+# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+#
+use strict;
+use warnings;
+use Monitoring::Plugin;
+use SNMP;
+
+my $np = Monitoring::Plugin->new(
+    'usage' => 'Usage: %s [ -v|--verbose ] -H <host> -C <snmp_community> [-2] [-t <timeout>] <process_spec> [<process_spec...>]',
+    'version' => '0.1',
+    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'shortname' => 'PROCS',
+    'blurb' => "A simple plugin to check running proccess via SNMP.",
+    'extra' => "
+The options should be followed by one or more <process_spec> entries, which
+indicate the processes to check.
+
+In its simplest form, the <process_spec> is merely the runtime name of a
+process (such as would be found by pgrep(1)).  However, <process_spec> can
+be extended to include warning and/or critical thresholds separated by
+commas (i.e. \"runtime_name,warning_threshold,critical_threshold\", e.g.
+\"ntpd,,1:1\" or \"apache2,10:20,5:25\").
+
+See https://www.monitoring-plugins.org/doc/guidelines.html#THRESHOLDFORMAT
+for an explanation of the threshold format.
+
+If you prefix the runtime_name with a + (plus), it is matched against the
+full command line rather than just the process name. You probably need to
+terminate option processing with -- before you can do this.
+
+If you prefix the runtime-name with a ~ (tilde), it is processed as regex.
+(whereas the -r option interpets all <process_spec> as regex). If used in
+conjunction with the + option above, it must be specified as +~name.
+",
+    'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
+);
+$np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
+$np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 161)', 'default' => 161);
+$np->add_arg('spec' => 'community|C=s', 'help' => 'SNMP community (defaults to "public")', 'default'=>'public');
+$np->add_arg('spec' => 'v2|2', 'help' => 'use SNMP v2c instead of 1');
+$np->add_arg('spec' => 'regex|r', 'help' => 'process_spec name is regex');
+$np->getopts;
+unless ($#ARGV >= 0) { print $np->opts->_usage; exit 1; }
+
+my @specs = ();
+foreach (@ARGV) {
+    my ($name, $warning, $critical, undef) = split /,/;
+    $np->plugin_die("process spec \"$_\" must include a process name") unless $name;
+    $critical = '1:' unless m/,/;
+    $warning = undef if (defined($warning) and $warning eq '');
+    $critical = undef if (defined($warning) and $warning eq '');
+    printf STDERR "spec '%s' processed as name:%s, warning:%s, critical:%s%s\n", $_, $name, $warning?$warning:'', $critical?$critical:'', $np->opts->regex ? ' (using regex)' : '' if $np->opts->verbose;
+#    $np->plugin_die("process spec \"$_\" warning field invalid") if $warn and not _valid_process_spec($warning);
+#    $np->plugin_die("process spec \"$_\" critical field invalid") if $critical and not _valid_process_spec($critical);
+    
+    push @specs, { -name => $name, -warning => $warning, -critical => $critical };
+}
+
+my $sess = new SNMP::Session(
+    DestHost => $np->opts->host,
+    Version => $np->opts->v2 ? 2 : 1,
+    Community => $np->opts->community,
+    RemotePort => $np->opts->port,
+    Timeout => $np->opts->timeout * 1000000, # micro-seconds
+);
+{
+    no warnings 'once';
+    $np->plugin_exit(CRITICAL, $SNMP::ErrorStr) unless defined($sess);
+}
+
+my $processlist = $sess->gettable('HOST-RESOURCES-MIB::hrSWRunTable');
+$np->plugin_die($sess->{ErrorStr}) if $sess->{ErrorNum};
+my %matches;
+
+# pass one, find matching processes
+foreach my $process (keys %$processlist) {
+    foreach my $spec (@specs) {
+        my $hrSWRunName =  $processlist->{$process}->{'hrSWRunName'};
+        my $specName = $spec->{-name};
+        if ($specName =~ m/^\+/) {
+            $hrSWRunName = $hrSWRunName . ' ' . $processlist->{$process}->{'hrSWRunParameters'};
+            $specName = substr($specName, 1);
+        }
+        print STDERR "testing $hrSWRunName = $specName\n" if $np->opts->verbose > 2;
+        if ($np->opts->regex or $specName =~ m/^~/) {
+            $specName = substr($specName, 1) if $specName =~ m/^~/;
+            my $pat = qr/$specName/i;
+            if ($hrSWRunName =~ m/$pat/) {
+                $matches{$spec->{-name}}++ ;
+                print STDERR "matched $hrSWRunName using /$pat/\n" if $np->opts->verbose > 1;
+            }
+        } else {
+            if ($specName eq $hrSWRunName) {
+                $matches{$spec->{-name}}++;
+                print STDERR "matched $hrSWRunName = $specName\n" if $np->opts->verbose > 1;
+            }
+        }
+    }
+}
+
+# pass two, check counts
+foreach my $spec (@specs) {
+    my $check = $matches{$spec->{-name}} ? $matches{$spec->{-name}} : 0;
+    my $code = $np->check_threshold(
+        check => $check,
+        warning => $spec->{-warning},
+        critical => $spec->{-critical},
+    );
+    printf STDERR "name=%s warning=%s critical=%s check=%s result=%s\n", $spec->{-name}, $spec->{-warning}?$spec->{-warning}:'', $spec->{-critical}?$spec->{-critical}:'', $check, $code if $np->opts->verbose;
+    if ($code == CRITICAL) {
+        $np->add_message($code, sprintf("%s %s %d fails %s", 
+            $Monitoring::Plugin::STATUS_TEXT{$code},
+            $spec->{-name},
+            $check, 
+            defined $spec->{-critical}?$spec->{-critical}:''
+        ));
+    } elsif ($code == WARNING) {
+        $np->add_message($code, sprintf("%s %s %d fails %s", 
+            $Monitoring::Plugin::STATUS_TEXT{$code},
+            $spec->{-name},
+            $check, 
+            defined $spec->{-warning}?$spec->{-warning}:''
+        ));
+    } elsif ($code == OK) {
+        $np->add_message($code, sprintf("%s %s (%d)", 
+            $Monitoring::Plugin::STATUS_TEXT{$code},
+            $spec->{-name},
+            $check
+        ));
+    } else {
+        $np->add_message($code, sprintf("%s %s %d",
+            $Monitoring::Plugin::STATUS_TEXT{$code},
+            $spec->{-name},
+            $check, 
+        ));
+    }
+    $np->add_perfdata(
+        'label' => $spec->{-name}, 
+        'value' => $check, 
+        'threshold' => Monitoring::Plugin::Threshold->set_thresholds(
+            warning  => $spec->{-warning},
+            critical => $spec->{-critical},
+        )
+    );
+}
+
+my ($code, $message) = $np->check_messages('join' => '; ', 'join_all' => "\n");
+$np->plugin_exit($code, $message);
+
+#use Data::Dumper;
+#print Dumper($processlist);
