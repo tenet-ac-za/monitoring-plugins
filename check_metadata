@@ -11,6 +11,7 @@ use HTTP::Status;
 use URI;
 use Date::Parse;
 use POSIX;
+use File::Temp qw/tempfile/;
 use XML::LibXML;
 use XML::LibXML::XPathContext;
 
@@ -29,6 +30,7 @@ $np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use for vhost', 'requi
 $np->add_arg('spec' => 'address|I=s', 'help' => 'IP address or name (use numeric address if possible to bypass DNS lookup).');
 $np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 80 or 443)',);
 $np->add_arg('spec' => 'ssl|S', 'help' => 'Use SSL');
+$np->add_arg('spec' => 'xmlsig|x=s', 'help' => 'PEM encoded certificate to use for XMLdsig verification');
 $np->add_arg('spec' => 'vw=i', 'help' => 'Warn if validty < vw days (default=2)', 'default' => 2);
 $np->add_arg('spec' => 'vc=i', 'help' => 'Critical if validty < vc days (default=1)', 'default' => 1);
 $np->add_arg('spec' => 'ew=i', 'help' => 'Warn if md:EntityDescriptor count < ew (default=10)', 'default' => 10);
@@ -67,6 +69,20 @@ eval { $dom = $xml->load_xml('string' => $res->decoded_content); };
 if ( $@ ) { $np->plugin_exit(CRITICAL, 'Response is not well-formed XML'); }
 
 print STDERR "Response is well-formed XML\n" if $np->opts->verbose;
+
+if ($np->opts->xmlsig) {
+    $np->plugin_die('Cannot find /usr/bin/xmlsec1') if (! -f '/usr/bin/xmlsec1');
+    my($fh, $filename) = tempfile();
+    print $fh $res->decoded_content;
+    my $cert = $np->opts->xmlsig;
+    my $out = qx{/usr/bin/xmlsec1 --verify --disable-error-msgs --trusted-pem '$cert' --id-attr:ID 'urn:oasis:names:tc:SAML:2.0:metadata:EntitiesDescriptor' '$filename' 2>&1};
+    print STDERR "XML Sig: $out\n" if $np->opts->verbose;
+    if ($? != 0 or $out !~ m/^OK/) {
+        $np->add_message(CRITICAL, "XML signature validation failed");
+    }
+    close($fh);
+    unlink($filename) if -f $filename;
+}
 
 my $xp = XML::LibXML::XPathContext->new($dom->getDocumentElement());
 $xp->registerNs('md', 'urn:oasis:names:tc:SAML:2.0:metadata');
