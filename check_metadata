@@ -22,7 +22,7 @@ my $np = Monitoring::Plugin->new(
     'blurb' => "A simple plugin to check remote SAML metadata feeds",
     'extra' => "
 There are a *lot* of features we'd like to add to this, most notably
-it should do xmldsig checking. We may get there eventually...
+it should do better xmldsig checking. We may get there eventually...
 ",
 );
 $np->add_arg('spec' => 'url|u=s', 'help' => 'URL to fetch (default: /)', 'default' => '/',);
@@ -43,11 +43,14 @@ $np->add_arg('spec' => 'fw=i', 'help' => 'Warn if HTTP document expires < fw day
 $np->add_arg('spec' => 'fc=i', 'help' => 'Critical if HTTP document expires < fc days (default=4)', 'default' => 2);
 $np->getopts;
 
+# sensible defaults for port
 my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
+# construct a URI, congniscent of the fact we may be dealing with vhosting
 my $uri = new URI(($np->opts->ssl ? 'https' : 'http') . '://' . ($np->opts->address ? $np->opts->address : $np->opts->host) . ':' . $port . $np->opts->url, $np->opts->ssl ? 'https' : 'http');
 
 print STDERR "Set URI to $uri\n" if $np->opts->verbose;
 
+# Fetch the metadata XML file
 my $ua = LWP::UserAgent->new;
 $ua->timeout($np->opts->timeout);
 my $res = $ua->get($uri, 'Host' => $np->opts->host);
@@ -57,6 +60,7 @@ if (!$res->is_success()) {
 }
 print STDERR "Got LWP response " . $res->code . "\n" if $np->opts->verbose;
 
+# Check the freshness (Expires, Cache-Control max-age, etc)
 print STDERR "fresh_until=" . $res->fresh_until() . " (" . strftime('%FT%TZ',gmtime($res->fresh_until())) . ") fc=" . $np->opts->fc . " fw=" . $np->opts->fw . "\n" if $np->opts->verbose;
 if ($res->fresh_until() > time() + ($np->opts->fc * 86400)) {
     $np->add_message(CRITICAL, "fresh_until=" . $res->fresh_until() . " > " . $np->opts->fc . " days");
@@ -64,12 +68,14 @@ if ($res->fresh_until() > time() + ($np->opts->fc * 86400)) {
     $np->add_message(WARNING, "fresh_until=" . $res->fresh_until() . " > " . $np->opts->fw . " days");
 }
 
+# Parse the XML
 my $xml = new XML::LibXML; my $dom;
 eval { $dom = $xml->load_xml('string' => $res->decoded_content); };
 if ( $@ ) { $np->plugin_exit(CRITICAL, 'Response is not well-formed XML'); }
 
 print STDERR "Response is well-formed XML\n" if $np->opts->verbose;
 
+# Attempt to verify xmldsig using xmlsec1 if it is available (hacky)
 if ($np->opts->xmlsig) {
     $np->plugin_die('Cannot find /usr/bin/xmlsec1') if (! -f '/usr/bin/xmlsec1');
     my($fh, $filename) = tempfile();
@@ -84,6 +90,7 @@ if ($np->opts->xmlsig) {
     unlink($filename) if -f $filename;
 }
 
+# Create an XPath object with the right namespaces
 my $xp = XML::LibXML::XPathContext->new($dom->getDocumentElement());
 $xp->registerNs('md', 'urn:oasis:names:tc:SAML:2.0:metadata');
 $xp->registerNs('shibmd', 'urn:mace:shibboleth:metadata:1.0');
@@ -93,6 +100,7 @@ $xp->registerNs('mdrpi', 'urn:oasis:names:tc:SAML:metadata:rpi');
 $xp->registerNs('mdattr', 'urn:oasis:names:tc:SAML:metadata:attribute');
 $xp->registerNs('saml', 'urn:oasis:names:tc:SAML:2.0:assertion');
 
+# Check the validity
 my ($validUntil) = $xp->findvalue('/md:EntitiesDescriptor/@validUntil');
 ($validUntil) = $xp->findvalue('/md:EntityDescriptor/@validUntil') unless $validUntil;
 print STDERR "validUntil=$validUntil vc=" . $np->opts->vc . " vw=" . $np->opts->vw . "\n" if $np->opts->verbose;
@@ -102,6 +110,7 @@ if (!$validUntil or str2time($validUntil) < time + ($np->opts->vc * 86400)) {
     $np->add_message(WARNING, 'Metadata validUntil=' . $validUntil . ' < ' . $np->opts->vw . ' days');
 }
 
+# Count the number of entities
 my ($entities) = $xp->findvalue('count(//md:EntityDescriptor)');
 $entities+=0;
 print STDERR "count(md:EntityDescriptor)=$entities ec=" . $np->opts->ec . " ew=" . $np->opts->ew . "\n" if $np->opts->verbose;
@@ -112,6 +121,7 @@ if ($entities < $np->opts->ec) {
     $np->add_message(WARNING, 'count(md:EntityDescriptor)=' . $entities . ' < ' . $np->opts->ew);
 }
 
+# Count the number of IdPs
 my ($idps) = $xp->findvalue('count(//md:EntityDescriptor/md:IDPSSODescriptor)', $dom);
 $idps+=0;
 print STDERR "count(md:IDPSSODescriptor)=$idps ic=" . $np->opts->ic . " iw=" . $np->opts->iw . "\n" if $np->opts->verbose;
@@ -122,6 +132,7 @@ if ($idps < $np->opts->ic) {
     $np->add_message(WARNING, 'count(md:IDPSSODescriptor)=' . $idps . ' < ' . $np->opts->iw);
 }
 
+# Count the number of SPs
 my ($sps) = $xp->findvalue('count(//md:EntityDescriptor/md:SPSSODescriptor)', $dom);
 print STDERR "count(md:SPSSODescriptor)=$sps sc=" . $np->opts->sc . " sw=" . $np->opts->sw . "\n" if $np->opts->verbose;
 $np->add_perfdata('label' => 'sps', 'value' => $sps, 'min' => 0, 'warning' => $np->opts->sw, 'critical' => $np->opts->sc);
