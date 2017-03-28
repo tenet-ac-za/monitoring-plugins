@@ -1,0 +1,85 @@
+#!/usr/bin/perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2017, SAFIRE - South African Identity Federation
+# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+#
+use strict;
+use warnings;
+use Monitoring::Plugin;
+use LWP::UserAgent;
+
+my $np = Monitoring::Plugin->new(
+    'usage' => 'Usage: %s [ -v|--verbose ]  [-H <vhost>] [-I <address>] [-t <timeout>] [-u <url>]',
+    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'version' => '0.1',
+    'blurb' => "A simple plugin to check SimpleSAMLphp SSO with loginuserpass.php or loginuserpassorg.php via the autotest module",
+    'extra' => "",
+);
+
+$np->add_arg('spec' => 'url|u=s', 'help' => 'URL to fetch (default: /)', 'default' => '/',);
+$np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use for vhost', 'required' => 1);
+$np->add_arg('spec' => 'address|I=s', 'help' => 'IP address or name (use numeric address if possible to bypass DNS lookup).');
+$np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 80 or 443)',);
+$np->add_arg('spec' => 'ssl|S', 'help' => 'Use SSL');
+$np->add_arg('spec' => 'user|U=s', 'help' => 'Username', 'required' => 1);
+$np->add_arg('spec' => 'userfield=s', 'help' => 'Username field (default=username)', 'default' => 'username');
+$np->add_arg('spec' => 'pass|P=s', 'help' => 'Password', 'required' => 1);
+$np->add_arg('spec' => 'passfield=s', 'help' => 'Password field (default=password)', 'default' => 'password');
+$np->add_arg('spec' => 'org|O=s', 'help' => 'Organisation/realm to add if using loginuserpassorg.php',);
+$np->add_arg('spec' => 'orgfield=s', 'help' => 'Organisation field (default=organization)', 'default' => 'organization');
+$np->getopts;
+
+my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
+my $uri = new URI(($np->opts->ssl ? 'https' : 'http') . '://' . ($np->opts->address ? $np->opts->address : $np->opts->host) . ':' . $port . $np->opts->url, $np->opts->ssl ? 'https' : 'http');
+
+print STDERR "Set URI to $uri\n" if $np->opts->verbose;
+
+my $ua = LWP::UserAgent->new;
+$ua->timeout($np->opts->timeout);
+$ua->cookie_jar({});
+
+# Phase 1: SP -> SSO
+my $res1 = $ua->get($uri, 'Host' => $np->opts->host);
+$np->plugin_die("Timeout!") if $res1->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+if (scalar $res1->redirects() < 2) {
+    $np->plugin_exit(CRITICAL, 'Phase 1: Should have been redirected');
+}
+my $authuri = $res1->request->uri;
+print STDERR "Phase 1: redirected to " . $authuri . "\n" if $np->opts->verbose;
+if (!$res1->is_success()) {
+    $np->plugin_exit(CRITICAL, 'Phase 1: HTTP ' . $res1->code . ' ' . $res1->message);
+}
+print STDERR "Phase 1: HTTP response " . $res1->code . "\n" if $np->opts->verbose;
+
+my ($authstatefield) = $res1->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
+my ($authstate) = $authstatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+print STDERR "Phase 1: AuthState " . $authstate . "\n" if $np->opts->verbose > 1;
+
+# Phase 2: SSO Login
+my $res2 = $ua->post($authuri, 'Content' => {
+    $np->opts->userfield => $np->opts->user,
+    $np->opts->passfield => $np->opts->pass,
+    $np->opts->orgfield => $np->opts->org,
+    'AuthState' => $authstate,
+});
+$np->plugin_die("Timeout!") if $res2->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+print STDERR "Phase 2: HTTP response " . $res2->code . "\n" if $np->opts->verbose;
+
+my $userfield = qr{$np->opts->userfield};
+my $passfield = qr{$np->opts->passfield};
+if ($res2->decoded_content() =~ m/\<\s*input\s+[^>]+($userfield|$passfield)/) {
+    $np->plugin_exit(CRITICAL, 'Phase 2: looped back to username/password input (authentication failed?)');
+}
+
+my ($samlresponsefield) = $res2->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLResponse[^>]+\>)/si;
+my ($samlresponse) = $samlresponsefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+print STDERR "Phase 2: SAMLResponse " . $samlresponse . "\n" if $np->opts->verbose > 1;
+my ($relaystatefield) = $res2->decoded_content() =~ m/(\<\s*input\s+[^>]*RelayState[^>]+\>)/si;
+my ($relaystate) = $relaystatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+print STDERR "Phase 2: RelayState " . $relaystate . "\n" if $np->opts->verbose > 1;
+if (not $samlresponse or not $relaystate) {
+    $np->plugin_exit(CRITICAL, 'Phase 2: No SAML response and/or relaystate');
+}
+
+# Phase 3: SSO -> SP
+
