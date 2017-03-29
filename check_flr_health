@@ -15,6 +15,18 @@ my $np = Monitoring::Plugin->new(
     'shortname' => 'FLRS',
     'blurb' => "A simple plugin to check an eduroam FLR server",
     'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
+    'extra' => "
+This plugin allows us to monitor radsecproxy running as an eduroam FLR server,
+where the server has been configured to respond using replymessage, something
+like this:
+
+  realm eduroam_flr_healthcheck {
+    replymessage \"OK additional info\"
+  }
+
+It is really just a check that the RADIUS proxy is sufficiently
+functional to interpret and respond to RADIUS Access-Request packets.
+",
 );
 $np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
 $np->add_arg('spec' => 'secret|S=s', 'help' => 'RADIUS secret', 'required' => 1);
@@ -22,6 +34,7 @@ $np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 1812)', '
 $np->add_arg('spec' => 'user|u=s', 'help' => 'Username to send (defaults to anonymous@eduroam_flr_healthcheck)', 'default' => 'anonymous@eduroam_flr_healthcheck');
 $np->getopts;
 
+alarm $np->opts->timeout;
 my $pid = open2(\*CHLD_OUT, \*CHLD_IN, '/usr/bin/radclient', '-t', $np->opts->timeout, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
 
 printf CHLD_IN "User-Name = \"%s\"\n", $np->opts->user;
