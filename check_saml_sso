@@ -7,11 +7,75 @@ use strict;
 use warnings;
 use Monitoring::Plugin;
 use LWP::UserAgent;
+use URI;
+use Time::HiRes qw(time);
+use vars qw ($hopCount);
+our $VERSION = '0.1';
+
+sub metadataMissing($$)
+{
+    my ($res, $np) = @_;
+    if ($res->code == HTTP::Status::HTTP_INTERNAL_SERVER_ERROR) {
+        # Special cases to match specific software (e.g. SimpleSAMLphp)
+        if ($res->decoded_content =~ m/metadata.*expired/si) {
+            $np->add_message(CRITICAL, 'IdP appears have out-of-date federation metadata (expired?)');
+        } elsif ($res->decoded_content =~ m/metadata.*(missing|not\s+found)/si) {
+            $np->add_message(CRITICAL, 'IdP appears to be missing federation metadata (not found?)');
+        }
+    }
+}
+
+sub checkForPOST
+{
+    my ($response, $ua, $np) = @_;
+    my ($samlrequestfield) = $response->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLRequest[^>]+\>)/si;
+    if (defined $samlrequestfield and $samlrequestfield) {
+        my ($samlrequest) = $samlrequestfield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+        my ($method) = $response->decoded_content() =~ m/\<form\s+[^>]*method=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+        my ($action) = $response->decoded_content() =~ m/\<form\s+[^>]*action=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+        print STDERR "Phase 1.5: POST to " . $action . " using HTTP " . $method . "\n" if $np->opts->verbose;
+        $np->add_message(OK, "POST to " . $action);
+
+        my $res = $ua->post($action, 'Content' => {
+            'SAMLRequest' => $samlrequest,
+        });
+        $np->plugin_die("Phase 1.5 Timeout!") if $res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+        foreach my $r ($res->redirects) {
+            next if $r->request->uri->eq($action);
+            $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
+            print STDERR "Phase 1.5: Redirected to " . $r->request->uri . "\n" if $np->opts->verbose;
+            $hopCount++;
+        }
+        unless ($res->request->uri->eq($action)) {
+            $np->add_message(OK, "Redirected to " . cleanURI($res->request->uri));
+            print STDERR "Phase 1.5: Redirected to " . $res->request->uri . "\n" if $np->opts->verbose;
+            $hopCount++;
+        }
+        if (!$res->is_success()) {
+            metadataMissing($res, $np);
+            $np->add_message(CRITICAL, 'Proxy HTTP ' . $res->code . ' ' . $res->message);
+            my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+            $np->plugin_exit($code, $message);
+        }
+        print STDERR "Phase 1.5: HTTP response " . $res->code . "\n" if $np->opts->verbose;
+
+        return checkForPOST($res, $ua, $np);
+    }
+    return $response;
+}
+
+sub cleanURI($)
+{
+    my $uri = URI->new(shift);
+    $uri->query(undef);
+    $uri->fragment(undef);
+    return $uri->as_string;
+}
 
 my $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ]  [-H <vhost>] [-I <address>] [-t <timeout>] [-u <url>]',
     'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
-    'version' => '0.1',
+    'version' => $VERSION,
     'blurb' => "A simple plugin to check SimpleSAMLphp SSO with loginuserpass.php or loginuserpassorg.php via the autotest module",
     'extra' => "",
 );
@@ -21,65 +85,146 @@ $np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use for vhost', 'requi
 $np->add_arg('spec' => 'address|I=s', 'help' => 'IP address or name (use numeric address if possible to bypass DNS lookup).');
 $np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 80 or 443)',);
 $np->add_arg('spec' => 'ssl|S', 'help' => 'Use SSL');
-$np->add_arg('spec' => 'user|U=s', 'help' => 'Username', 'required' => 1);
+$np->add_arg('spec' => 'user|U=s', 'help' => 'Username');
 $np->add_arg('spec' => 'userfield=s', 'help' => 'Username field (default=username)', 'default' => 'username');
-$np->add_arg('spec' => 'pass|P=s', 'help' => 'Password', 'required' => 1);
+$np->add_arg('spec' => 'pass|P=s', 'help' => 'Password');
 $np->add_arg('spec' => 'passfield=s', 'help' => 'Password field (default=password)', 'default' => 'password');
 $np->add_arg('spec' => 'org|O=s', 'help' => 'Organisation/realm to add if using loginuserpassorg.php',);
 $np->add_arg('spec' => 'orgfield=s', 'help' => 'Organisation field (default=organization)', 'default' => 'organization');
+$np->add_arg('spec' => 'redirectonly|R', 'help' => 'Test redirects only (no login)', 'default' => 0);
 $np->getopts;
 
 my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
 my $uri = new URI(($np->opts->ssl ? 'https' : 'http') . '://' . ($np->opts->address ? $np->opts->address : $np->opts->host) . ':' . $port . $np->opts->url, $np->opts->ssl ? 'https' : 'http');
+my $userfield = scalar $np->opts->userfield;
+my $passfield = scalar $np->opts->passfield;
+
+# perfdata
+$hopCount = 0;
+my $startTime = time();
 
 print STDERR "Set URI to $uri\n" if $np->opts->verbose;
+$np->add_message(OK, "Initiate SSO at " . cleanURI($uri));
 
+$ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
 my $ua = LWP::UserAgent->new;
 $ua->timeout($np->opts->timeout);
 $ua->cookie_jar({});
+$ua->agent('check_saml_sso/' . $VERSION . ' ' . $ua->_agent););
+push @{ $ua->requests_redirectable }, 'POST';
 
 # Phase 1: SP -> SSO
 my $res1 = $ua->get($uri, 'Host' => $np->opts->host);
-$np->plugin_die("Timeout!") if $res1->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+$np->plugin_die("Phase 1 Timeout!") if $res1->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
 if (scalar $res1->redirects() < 2) {
     $np->plugin_exit(CRITICAL, 'Phase 1: Should have been redirected');
 }
-my $authuri = $res1->request->uri;
-print STDERR "Phase 1: redirected to " . $authuri . "\n" if $np->opts->verbose;
+foreach my $r ($res1->redirects) {
+    next if $r->request->uri->eq($uri);
+    $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
+    print STDERR "Phase 1: Redirected to " . $r->request->uri . "\n" if $np->opts->verbose;
+    $hopCount++;
+}
+unless ($res1->request->uri->eq($uri)) {
+    $np->add_message(OK, "Redirected to " . cleanURI($res1->request->uri));
+    print STDERR "Phase 1: Redirected to " . $res1->request->uri . "\n" if $np->opts->verbose;
+    $hopCount++;
+}
 if (!$res1->is_success()) {
-    $np->plugin_exit(CRITICAL, 'Phase 1: HTTP ' . $res1->code . ' ' . $res1->message);
+    metadataMissing($res1, $np);
+    $np->add_message(CRITICAL, 'SSO Redirect HTTP ' . $res1->code . ' ' . $res1->message);
+    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+    $np->plugin_exit($code, $message);
 }
 print STDERR "Phase 1: HTTP response " . $res1->code . "\n" if $np->opts->verbose;
 
-my ($authstatefield) = $res1->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
-my ($authstate) = $authstatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-print STDERR "Phase 1: AuthState " . $authstate . "\n" if $np->opts->verbose > 1;
+my $res2 = checkForPOST($res1, $ua, $np);
 
 # Phase 2: SSO Login
-my $res2 = $ua->post($authuri, 'Content' => {
+
+unless ($res2->is_success) {
+    metadataMissing($res2, $np);
+    $np->add_message(CRITICAL, 'SSO Login Page HTTP ' . $res1->code . ' ' . $res1->message);
+    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+    $np->plugin_exit($code, $message);
+}
+
+if ($res2->decoded_content =~ m/$userfield/i) {
+    $np->add_message(OK, "Userfield found matching: " . $userfield);
+} else {
+    $np->add_message(WARNING, "NO userfield found matching: " . $userfield);
+}
+
+# don't try login
+if ($np->opts->redirectonly) {
+    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+    if ($code == OK) {
+        $message = "Login page found at " . cleanURI($res2->request->uri) . "\n\n" . $message;
+    }
+    $np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 3);
+    $np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
+    $np->plugin_exit($code, $message);
+}
+
+my ($authstatefield) = $res2->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
+$np->plugin_exit(CRITICAL, 'Phase 2: AuthState field missing') unless defined $authstatefield;
+my ($authstate) = $authstatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+$np->plugin_exit(CRITICAL, 'Phase 2: AuthState missing') unless defined $authstate;
+
+print STDERR "Phase 2: AuthState " . $authstate . "\n" if $np->opts->verbose > 1;
+
+my $res3 = $ua->post($res2->request->uri, 'Content' => {
     $np->opts->userfield => $np->opts->user,
     $np->opts->passfield => $np->opts->pass,
     $np->opts->orgfield => $np->opts->org,
     'AuthState' => $authstate,
 });
-$np->plugin_die("Timeout!") if $res2->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
-print STDERR "Phase 2: HTTP response " . $res2->code . "\n" if $np->opts->verbose;
+$np->plugin_die("Phase 2 Timeout!") if $res3->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+foreach my $r ($res3->redirects) {
+    next if $r->request->uri->eq($res2->request->uri);
+    $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
+    print STDERR "Phase 2: Redirected to " . $r->request->uri . "\n" if $np->opts->verbose;
+}
+unless ($res3->request->uri->eq($res2->request->uri)) {
+    $np->add_message(OK, "Redirected to " . cleanURI($res3->request->uri));
+    print STDERR "Phase 2: Redirected to " . $res3->request->uri . "\n" if $np->opts->verbose;
+}
+if (!$res3->is_success()) {
+    $np->add_message(CRITICAL, 'SSO Authenticate HTTP ' . $res3->code . ' ' . $res3->message);
+    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+    $np->plugin_exit($code, $message);
+}
+print STDERR "Phase 2: HTTP response " . $res3->code . "\n" if $np->opts->verbose;
 
-my $userfield = qr{$np->opts->userfield};
-my $passfield = qr{$np->opts->passfield};
-if ($res2->decoded_content() =~ m/\<\s*input\s+[^>]+($userfield|$passfield)/) {
-    $np->plugin_exit(CRITICAL, 'Phase 2: looped back to username/password input (authentication failed?)');
+# Phase 3: SSO Response
+
+if ($res3->decoded_content() =~ m/\<\s*input\s+[^>]+($userfield|$passfield)/) {
+    $np->add_message(CRITICAL, 'Looped back to username/password input (authentication failed?)');
+    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+    $np->plugin_exit($code, $message);
 }
 
-my ($samlresponsefield) = $res2->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLResponse[^>]+\>)/si;
+my ($samlresponsefield) = $res3->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLResponse[^>]+\>)/si;
 my ($samlresponse) = $samlresponsefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-print STDERR "Phase 2: SAMLResponse " . $samlresponse . "\n" if $np->opts->verbose > 1;
-my ($relaystatefield) = $res2->decoded_content() =~ m/(\<\s*input\s+[^>]*RelayState[^>]+\>)/si;
+print STDERR "Phase 3: SAMLResponse " . $samlresponse . "\n" if $np->opts->verbose > 1;
+my ($relaystatefield) = $res3->decoded_content() =~ m/(\<\s*input\s+[^>]*RelayState[^>]+\>)/si;
 my ($relaystate) = $relaystatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-print STDERR "Phase 2: RelayState " . $relaystate . "\n" if $np->opts->verbose > 1;
-if (not $samlresponse or not $relaystate) {
-    $np->plugin_exit(CRITICAL, 'Phase 2: No SAML response and/or relaystate');
+print STDERR "Phase 3: RelayState " . $relaystate . "\n" if $np->opts->verbose > 1;
+if (not $samlresponse and not $relaystate) {
+    $np->add_message(CRITICAL, 'Phase 3: No SAML response and/or relaystate');
+    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+    $np->plugin_exit($code, $message);
 }
 
-# Phase 3: SSO -> SP
+# Phase 4: SSO -> SP
 
+
+# All Done :-)
+
+my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+if ($code == OK) {
+    $message = "Authentiction at " . cleanURI($res3->request->uri) . " succeeded\n\n" . $message;
+}
+$np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 5);
+$np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
+$np->plugin_exit($code, $message);
