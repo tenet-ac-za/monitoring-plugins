@@ -110,7 +110,7 @@ $ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
 my $ua = LWP::UserAgent->new;
 $ua->timeout($np->opts->timeout);
 $ua->cookie_jar({});
-$ua->agent('check_saml_sso/' . $VERSION . ' ' . $ua->_agent););
+$ua->agent('check_saml_sso/' . $VERSION . ' ' . $ua->_agent);
 push @{ $ua->requests_redirectable }, 'POST';
 
 # Phase 1: SP -> SSO
