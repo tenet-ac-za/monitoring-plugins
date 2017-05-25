@@ -109,7 +109,7 @@ while (my $realm = $sth->fetchrow_hashref) {
     my $defangedPassword = $realm->{'pass'}; $defangedPassword =~ s/([#;])/\\$1/g;
 
     # Sanity check the realm
-    $realm->{'username'} .= '@' . $realm->{'realm'} unless $realm->{'username'} =~ m/\@/;
+    $realm->{'username'} .= '@' . $realm->{'realm'} unless $realm->{'username'} =~ m/\@/ or not $realm->{'username'};
     if ($realm->{'username'} !~ m/\@(.+\.)?$regexRealm$/i) {
         printf(STDERR "Skipping test user %s in realm %s (%s)\n", $realm->{'username'}, $realm->{'realm'}, $regexRealm) if defined $c->{'verbose'};
         next;
