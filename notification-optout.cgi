@@ -59,7 +59,7 @@ sub globalConfig()
     my $baseConfig = $ENV{'OMD_ROOT'} . '/etc/omd-notification-optout.cfg';
     $baseConfig = '/etc/omd-notification-optout.cfg' unless -f $baseConfig;
     $baseConfig = 'omd-notification-optout.cfg' unless -f $baseConfig;
-    $baseConfig = "/dev/null" unless -f $baseConfig;	# allow an empty config file
+    $baseConfig = "/dev/null" unless -f $baseConfig;    # allow an empty config file
     my $c = Config::YAML->new(
         config => $baseConfig,
         defaultTokenKey => 'changeme',
@@ -111,15 +111,28 @@ while (my $q = CGI::Fast->new) {
         _error("Token did not translate to a valid email address."); next;
     }
 
-    if ($email ~~ $s->{'disableContacts'}) {	# smartmatch
+    if ($email ~~ $s->{'disableContacts'}) {    # smartmatch
         _error(sprintf("<b>%s</b> has already been disabled for notifications from %s.", $email, $ENV{'SERVER_NAME'})); next;
     }
 
-    push(@{$s->{'disableContacts'}}, $email);
+    if ($q->param('confirm')) {
 
-    unless ($s->write()) {
-        _error("Error saving opt-out preference, please try again later."); next;
+        push(@{$s->{'disableContacts'}}, $email);
+
+        unless ($s->write()) {
+            _error("Error saving opt-out preference, please try again later."); next;
+        }
+
+        printf "<p>Successfully disabled notifications for <b>%s</b> from %s :-)</p>\n", $email, $ENV{'SERVER_NAME'};
+
+    } else {
+        printf "<p>Please confirm you want to opt-out of notifications for <b>%s</b>\n", $email;
+        print  '<form>';
+        printf '<input type="hidden" name="q" value="%s">', $token;
+        print  '<input type="hidden" name="confirm" value="true">';
+        print  '<input type="submit" value="Confirm Opt-Out">';
+        print  "</form>\n";
     }
 
-    printf "<p>Successfully disabled notifications for <b>%s</b> from %s :-)</p>\n", $email, $ENV{'SERVER_NAME'};
+    print '</body></html>';
 }
