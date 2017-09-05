@@ -11,6 +11,16 @@ use DBI;
 use Getopt::Long;
 use Pod::Usage;
 use Config::YAML;
+use MIME::Base64::URLSafe;
+use Crypt::CBC;
+
+sub emailToken($$)
+{
+    my ($email, $key) = @_;
+    my $cipher = Crypt::CBC->new(-key => $key, -cipher => 'DES');
+    my $ciphertext = $cipher->encrypt($email);
+    return MIME::Base64::URLSafe::encode($ciphertext);
+}
 
 # Read a config file
 my $baseConfig = exists($ENV{'OMD_ROOT'}) ? $ENV{'OMD_ROOT'} . '/etc/djnro-realms.cfg' : '/etc/djnro-realms.cfg';
@@ -28,6 +38,7 @@ my $c = Config::YAML->new(
     djnroDbPass => '',
     disableContacts => [],
     credentialOverride => { 'example.ac.za' => { method=>'PEAP', 'phase2'=>'MSCHAPV2', 'anonymous'=>'anonymous@example.ac.za', 'username'=>'username@example.ac.za', 'pass'=>'password' } },
+    tokenKey => 'changeme',
 );
 GetOptions($c,
     'config|c=s',
@@ -39,6 +50,7 @@ GetOptions($c,
     'djnroDSN|dsn|d=s',
     'djnroDbUser|user|u=s',
     'djnroDbPass|pass|p=s',
+    'tokenKey|key|k=s',
     'write|w=s',
     'dump|D!',
     'help|h|?',
@@ -138,6 +150,7 @@ while (my $realm = $sth->fetchrow_hashref) {
             print  $nagConf "  service_notifications_enabled  0\n";
             print  $nagConf "  service_notification_options   n\n";
         }
+        printf $nagConf "  _UNSUBSCRIBE_TOKEN             %s\n", emailToken($contact->{'contact_email'}, $c->{'tokenKey'});
         printf $nagConf "  contactgroups                  djnro-cg-%s\n", $defangedRealm;
         print  $nagConf "  use                            djnro-generated-contact\n";
         print  $nagConf "}\n\n";
