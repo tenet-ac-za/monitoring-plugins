@@ -115,7 +115,7 @@ while (my $q = CGI::Fast->new) {
         _error(sprintf("<b>%s</b> has already been disabled for notifications from %s.", $email, $ENV{'SERVER_NAME'})); next;
     }
 
-    if ($q->param('confirm')) {
+    if ($q->param('List-Unsubscribe') eq 'One-Click') {
 
         push(@{$s->{'disableContacts'}}, $email);
 
@@ -129,7 +129,7 @@ while (my $q = CGI::Fast->new) {
         printf "<p>Please confirm you want to opt-out of notifications for <b>%s</b>\n", $email;
         print  '<form>';
         printf '<input type="hidden" name="q" value="%s">', $token;
-        print  '<input type="hidden" name="confirm" value="true">';
+        print  '<input type="hidden" name="List-Unsubscribe" value="One-Click">';
         print  '<input type="submit" value="Confirm Opt-Out">';
         print  "</form>\n";
     }
