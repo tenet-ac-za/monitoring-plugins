@@ -125,6 +125,11 @@ while (my $q = CGI::Fast->new) {
 
         printf "<p>Successfully disabled notifications for <b>%s</b> from %s :-)</p>\n", $email, $ENV{'SERVER_NAME'};
 
+        if (defined $c->{'resetConfigMtime'} and $c->{'resetConfigMtime'}) {
+            utime(0, 0, $c->{'_outfile'});
+            print "<p>This change will take affect when the monitoring system next reloads its config. This typically happens every few hours.</p>\n";
+        }
+
     } else {
         printf "<p>Please confirm you want to opt-out of notifications for <b>%s</b>\n", $email;
         print  '<form>';
