@@ -269,6 +269,10 @@ Set the URL to fetch metadata from. Must me a method supported by L<LWP::UserAge
 
 Set the base URL (or URN prefix) for the BIRK IdP Proxy (WAYF/SAFIRE). Note that you must set a URL if you want to use a URN.
 
+=item B<--tokenKey>=C<string>, -k C<string>
+
+Set an encryption key that is used to generate an opaque opt-out "unsubscribe" token for each contact defination. Defaults to C<changeme>.
+
 =item B<--write>=C<file>, -w C<file>
 
 Writes a new config file to C<file> (can be used to bootstrap a config file).
