@@ -9,8 +9,28 @@ use Monitoring::Plugin;
 use LWP::UserAgent;
 use URI;
 use Time::HiRes qw(time);
+use Date::Parse;
 use vars qw ($hopCount);
-our $VERSION = '0.1';
+our $VERSION = '0.2';
+
+# verify the certificate date
+sub SSL_verify_callback
+{
+    if ($main::np->opts->certificate) {
+        my ($warning,$critical) = split /,/, $main::np->opts->certificate;
+        $critical = $warning unless defined ($critical);
+        my $cert = $_[4];
+        my $notAfter = Net::SSLeay::P_ASN1_TIME_get_isotime(Net::SSLeay::X509_get_notAfter($cert));
+        my $daysLeft = int((str2time($notAfter) - $main::startTime)/86400);
+        my $subject =  Net::SSLeay::X509_NAME_get_text_by_NID(Net::SSLeay::X509_get_subject_name($cert), &Net::SSLeay::NID_commonName);
+        if ($critical && $critical >= $daysLeft) {
+            $main::np->add_message(CRITICAL,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+        } elsif ($warning && $warning >= $daysLeft) {
+            $main::np->add_message(CRITICAL,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+        }
+    }
+    return 1;
+}
 
 sub metadataMissing($$)
 {
@@ -72,7 +92,7 @@ sub cleanURI($)
     return $uri->as_string;
 }
 
-my $np = Monitoring::Plugin->new(
+our $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ]  [-H <vhost>] [-I <address>] [-t <timeout>] [-u <url>]',
     'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'version' => $VERSION,
@@ -92,6 +112,7 @@ $np->add_arg('spec' => 'passfield=s', 'help' => 'Password field (default=passwor
 $np->add_arg('spec' => 'org|O=s', 'help' => 'Organisation/realm to add if using loginuserpassorg.php',);
 $np->add_arg('spec' => 'orgfield=s', 'help' => 'Organisation field (default=organization)', 'default' => 'organization');
 $np->add_arg('spec' => 'redirectonly|R', 'help' => 'Test redirects only (no login)', 'default' => 0);
+$np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a certificate has to be valid');
 $np->getopts;
 
 my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
@@ -101,16 +122,17 @@ my $passfield = scalar $np->opts->passfield;
 
 # perfdata
 $hopCount = 0;
-my $startTime = time();
+our $startTime = time();
 
 print STDERR "Set URI to $uri\n" if $np->opts->verbose;
 $np->add_message(OK, "Initiate SSO at " . cleanURI($uri));
 
-$ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
+#$ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
 my $ua = LWP::UserAgent->new;
 $ua->timeout($np->opts->timeout);
 $ua->cookie_jar({});
 $ua->agent('check_saml_sso/' . $VERSION . ' ' . $ua->_agent);
+$ua->ssl_opts('SSL_verify_callback' => \&SSL_verify_callback);
 push @{ $ua->requests_redirectable }, 'POST';
 
 # Phase 1: SP -> SSO
