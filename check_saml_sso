@@ -10,6 +10,7 @@ use LWP::UserAgent;
 use URI;
 use Time::HiRes qw(time);
 use Date::Parse;
+use POSIX;
 use vars qw ($hopCount);
 our $VERSION = '0.2';
 
@@ -26,7 +27,7 @@ sub SSL_verify_callback
         if ($critical && $critical >= $daysLeft) {
             $main::np->add_message(CRITICAL,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         } elsif ($warning && $warning >= $daysLeft) {
-            $main::np->add_message(CRITICAL,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+            $main::np->add_message(WARNING,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         }
     }
     return 1;
@@ -112,7 +113,8 @@ $np->add_arg('spec' => 'passfield=s', 'help' => 'Password field (default=passwor
 $np->add_arg('spec' => 'org|O=s', 'help' => 'Organisation/realm to add if using loginuserpassorg.php',);
 $np->add_arg('spec' => 'orgfield=s', 'help' => 'Organisation field (default=organization)', 'default' => 'organization');
 $np->add_arg('spec' => 'redirectonly|R', 'help' => 'Test redirects only (no login)', 'default' => 0);
-$np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a certificate has to be valid');
+$np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a certificate has to be valid (same format as check_http)');
+$np->add_arg('spec' => 'metadatacertinfo=s', 'help' => 'Internal option for passing metadata certificate expiry data');
 $np->getopts;
 
 my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
@@ -123,6 +125,21 @@ my $passfield = scalar $np->opts->passfield;
 # perfdata
 $hopCount = 0;
 our $startTime = time();
+
+# check metadata certificate expiry (hard-coded into config)
+if ($np->opts->certificate && $np->opts->metadatacertinfo) {
+    my ($warning,$critical) = split /,/, $np->opts->certificate;
+    $critical = $warning unless defined ($critical);
+    foreach my $cert (split /\|/, $np->opts->metadatacertinfo) {
+        my ($notAfter, $subject) = split /\//, $cert;
+        my $daysLeft = int(($notAfter - $startTime)/86400);
+        if ($critical && $critical >= $daysLeft) {
+            $np->add_message(CRITICAL,  sprintf("Metadata certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+        } elsif ($warning && $warning >= $daysLeft) {
+            $np->add_message(WARNING,  sprintf("Metadata certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+        }
+    }
+}
 
 print STDERR "Set URI to $uri\n" if $np->opts->verbose;
 $np->add_message(OK, "Initiate SSO at " . cleanURI($uri));

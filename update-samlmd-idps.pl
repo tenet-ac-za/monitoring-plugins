@@ -15,6 +15,8 @@ use XML::XPath::XMLParser;
 use Config::YAML;
 use MIME::Base64::URLSafe;
 use Crypt::CBC;
+use Crypt::OpenSSL::X509;
+use Date::Parse;
 
 sub emailToken($$)
 {
@@ -136,6 +138,14 @@ foreach my $entity ($entities->get_nodelist) {
         $birkifiedEntityID = defined $c->{'birkURN'} . ':' . $entityID if defined $c->{'birkURN'} and $birkifiedEntityID eq $entityID;
     }
 
+    # record details of the metadata certs
+    my @certs;
+    foreach my $cert ($xp->find('md:IDPSSODescriptor/md:KeyDescriptor/ds:KeyInfo/ds:X509Data/ds:X509Certificate', $entity)->get_nodelist) {
+        my $x509 = Crypt::OpenSSL::X509->new_from_string("-----BEGIN CERTIFICATE-----\n".$cert->string_value."\n-----END CERTIFICATE-----\n", Crypt::OpenSSL::X509::FORMAT_PEM);
+        my $subject = $x509->subject_name->get_entry_by_type('CN')->value(); $subject =~ s/[^\w .-]/_/g;
+        push @certs, sprintf("%d/%s", str2time($x509->notAfter), $subject);
+    }
+
     my $primaryScope = $xp->find('md:IDPSSODescriptor/md:Extensions/shibmd:Scope', $entity)->shift()->string_value;
     printf("SCOPE %s\n", $primaryScope) if defined $c->{'verbose'};
 
@@ -192,6 +202,7 @@ foreach my $entity ($entities->get_nodelist) {
     printf $nagConf "  _BIRKIFIEDENTITYID             %s\n", $birkifiedEntityID if defined $c->{'birkURL'};
     printf $nagConf "  _PRIMARYSCOPE                  %s\n", $primaryScope;
     printf $nagConf "  _INSTITUTION                   %s\n", $xp->findvalue("md:Organization/md:OrganizationName[\@xml:lang='en']", $entity);
+    printf $nagConf "  _CERTINFO                      %s\n", join('|', @certs) if @certs;
     print  $nagConf "}\n\n";
 
     # Service dependencies stop us sending notification when radsecproxy itself is broken
@@ -315,4 +326,5 @@ A list of email addresses that should never receive notifications.
 =head1 LICENSE
 
 This software is released under an MIT license.
+
 
