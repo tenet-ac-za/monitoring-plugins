@@ -149,7 +149,7 @@ foreach my $entity ($entities->get_nodelist) {
     my $primaryScope = $xp->find('md:IDPSSODescriptor/md:Extensions/shibmd:Scope', $entity)->shift()->string_value;
     printf("SCOPE %s\n", $primaryScope) if defined $c->{'verbose'};
 
-    my $contacts = $xp->find('md:ContactPerson', $entity);
+    my $contacts = $xp->find('md:ContactPerson[@contactType = "technical" or @contactType = "support"]', $entity);
     foreach my $contact ($contacts->get_nodelist) {
         my $givenName = $xp->findvalue('md:GivenName', $contact);
         my $sn = $xp->findvalue('md:SurName', $contact);
