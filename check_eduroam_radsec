@@ -42,7 +42,7 @@ sub findDynamicRadsec($)
         $np->add_message(WARNING, 'NAPTR replacement '.$rr->replacement.' is not expected') if ($np->opts->replacement and not grep { lc($_) eq lc($rr->replacement)} @{$np->opts->replacement});
         push @srvs, $rr->replacement;
     }
-    $np->add_message($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No x-eduroam:radius.tls NAPTR records found') unless @srvs;
+    $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No x-eduroam:radius.tls NAPTR records found') unless @srvs;
     $np->add_perfdata('label'=>'naptrs', 'value'=>($#srvs+1), 'min'=>0);
     $np->add_message(CRITICAL, 'More than one x-eduroam:radius.tls NAPTR record found.') if @srvs and $#srvs > 1;
 
