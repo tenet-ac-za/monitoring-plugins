@@ -1,0 +1,173 @@
+#!/usr/bin/perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2018, SAFIRE - South African Identity Federation
+# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+#
+use strict;
+use warnings;
+use Monitoring::Plugin;
+use Net::DNS;
+use IO::Socket::INET6;
+use IO::Socket::SSL;
+
+sub findDynamicRadsec($) {
+    my ($np) = @_;
+    my $res = Net::DNS::Resolver->new;
+
+    # Find the eduroam NAPTR records
+    my @srvs;
+    my $naptr = $res->query($np->opts->host, 'NAPTR');
+    $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No NAPTR records found') unless $naptr;
+
+    foreach my $rr (grep { $_->type eq 'NAPTR' } $naptr->answer) {
+        next unless lc($rr->service) eq 'x-eduroam:radius.tls';
+        $np->add_message(CRITICAL, 'x-eduroam:radius.tls NAPTR record must have the "S" flag') unless uc($rr->flags) eq 'S';
+        $rr->print if $np->opts->verbose;
+        $np->add_message(WARNING, 'NAPTR replacement '.$rr->replacement.' is not expected') if ($np->opts->replacement and not grep { lc($_) eq lc($rr->replacement)} @{$np->opts->replacement});
+        push @srvs, $rr->replacement;
+    }
+    $np->add_message($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No x-eduroam:radius.tls NAPTR records found') unless @srvs;
+    $np->add_message(CRITICAL, 'More than one x-eduroam:radius.tls NAPTR record found.') if @srvs and $#srvs > 1;
+
+    # Find the corresponding SRV records
+    my @mergedservers;
+    my $srv = $res->query($srvs[0], 'SRV');
+    unless ($srv) {
+        $np->add_message(CRITICAL, 'SRV record "'.$srvs[0].'" did not resolve');
+    } else {
+
+        my $srvcount=0;
+        foreach my $rr (grep { $_->type eq 'SRV' } $srv->answer) {
+            my @targets;
+            $srvcount++;
+            $rr->print if $np->opts->verbose;
+            $np->add_message(WARNING, 'SRV target '.$rr->target.' uses a non-standard port ('.$rr->port.')') unless $rr->port == $np->opts->port;
+            $np->add_message(WARNING, 'SRV target '.$rr->target.' is not expected') if ($np->opts->target and not grep { lc($_) eq lc($rr->target)} @{$np->opts->target});
+
+            my $cname = $res->query($rr->target, 'CNAME');
+            if ($cname) {
+                $np->add_message(WARNING, 'SRV target '.$rr->target.' should be a canonical hostname not a CNAME');
+                foreach my $cnamerr (grep { $_->type eq 'CNAME' } $cname->answer) {
+                    $cname->print if $np->opts->verbose;
+                }
+            }
+            
+            my $aaaa = $res->query($rr->target, 'AAAA');
+            if ($aaaa) {
+                foreach my $aaaarr (grep { $_->type eq 'AAAA' } $aaaa->answer) {
+                    $aaaarr->print if $np->opts->verbose;
+                    push @targets, { 'host'=>$rr->target, 'addr'=>$aaaarr->address, 'port'=>$rr->port };
+                }
+            }
+
+            my $a = $res->query($rr->target, 'A');
+            if ($a) {
+                foreach my $arr (grep { $_->type eq 'A' } $a->answer) {
+                    $arr->print if $np->opts->verbose;
+                    push @targets, { 'host'=>$rr->target, 'addr'=>$arr->address, 'port'=>$rr->port };
+                }
+            }
+            
+            if (@targets) {
+                @mergedservers = (@mergedservers, @targets);
+            } else {
+                $np->add_message(CRITICAL, 'SRV target '.$rr->target.' did not resolve to any valid IP addresses');
+            }
+        }
+        $np->add_perfdata('label'=>'srvs', 'value'=>$srvcount, 'min'=>0);
+    }
+    return @mergedservers;
+}
+
+my $np = Monitoring::Plugin->new(
+    'usage' => 'Usage: %s -H <host> [-t <timeout>]',
+    'version' => '0.1',
+    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'shortname' => 'RadSec',
+    'blurb' => "A simple plugin to check an eduroam RadSec server",
+    'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
+    'extra' => 
+"
+This plugin allows us to test RadSec
+",
+);
+$np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
+$np->add_arg('spec' => 'dynamic|D', 'help' => 'Use dynamic discovery via NAPTR/SRV');
+$np->add_arg('spec' => 'nonaptr|N=s', 'help' => 'Status to return when a NAPTR record is not found during dynamic discovery (defaults to WARNING).', 'default' => 'WARNING', 'label'=>'['.join(',', keys %Monitoring::Plugin::ERRORS).']');
+$np->add_arg('spec' => 'target|T=s@', 'help' => 'Target host to expect in SRV records for dynamic discovery (can be specified multiple times)');
+$np->add_arg('spec' => 'replacement|R=s@', 'help' => 'Replacement to expect in NAPTR records for dynamic discovery (can be specified multiple times)');
+$np->add_arg('spec' => 'port|p=i', 'help' => 'RadSec port we should use or expect in SRV records (default 2083).', 'default' => 2083);
+$np->add_arg('spec' => 'skiptcp|S', 'help' => 'Don\'t try connect to RADIUS server');
+$np->add_arg('spec' => 'skipssl|L', 'help' => 'Don\'t try start an SSL session');
+$np->add_arg('spec' => 'rootcert|r=s', 'help' => 'root certificate or directory to be used for', 'label'=>'file');
+$np->add_arg('spec' => 'clientcert|C=s', 'help' => 'use client certificate to authenticate', 'label'=>'file');
+$np->add_arg('spec' => 'clientpass=s', 'help' => 'set passphrase for client certificate');
+$np->add_arg('spec' => 'clientkey|K=s', 'help' => 'use client private key to authenticate', 'label'=>'file');
+$np->getopts;
+
+# check the nonaptr states
+$np->plugin_die('"'.$np->opts->nonaptr.'" is not a valid exit status. Must be one of ['.join(',', keys %Monitoring::Plugin::ERRORS).']')
+    unless (grep { $_ eq $np->opts->nonaptr} keys %Monitoring::Plugin::ERRORS);
+
+alarm $np->opts->timeout;
+
+# Find the RADIUS servers
+my @radsecservers;
+if ($np->opts->dynamic) {
+    $np->add_perfdata('label'=>'dynamic', 'value'=>1, 'min'=>0,'max'=>1);
+    @radsecservers = findDynamicRadsec($np);
+} else {
+    $np->add_perfdata('label'=>'dynamic', 'value'=>0, 'min'=>0,'max'=>1);
+    push @radsecservers, {'host'=>$np->opts->host, 'addr'=>$np->opts->host, 'port'=>$np->opts->port};
+}
+
+$np->add_perfdata('label'=>'servers', 'value'=>($#radsecservers+1), 'min'=>0);
+unless (@radsecservers) {
+    $np->add_message(CRITICAL, 'No RADIUS servers found to query');
+} else {
+    if ($np->opts->skiptcp) {
+        if ($np->opts->dynamic) {
+            $np->add_message(OK, ($#radsecservers+1) . ' servers found via dynamic discovery');
+        } else {
+             $np->add_message(OK, 'connection tests skipped');
+        }
+    } else {
+        foreach my $server (@radsecservers) {
+            my $client;
+            if ($np->opts->skipssl) {
+                print "using IO::Socket::INET6\n" if $np->opts->verbose;
+                $client = IO::Socket::INET6->new(
+                    PeerHost=>$server->{addr},
+                    PeerPort=>$server->{port},
+                    Proto=>'tcp',
+                    Type => SOCK_STREAM,
+                    Timeout=>$np->opts->timeout,
+                );
+                $SSL_ERROR='';
+            } else {
+                print "using IO::Socket::SSL\n" if $np->opts->verbose;
+                $client = IO::Socket::SSL->new(
+                    PeerHost=>$server->{addr},
+                    PeerPort=>$server->{port},
+                    SSL_ca_file=>$np->opts->rootcert,
+                    SSL_cert_file=>$np->opts->clientcert,
+                    SSL_key_file=>$np->opts->clientkey?$np->opts->clientkey:$np->opts->clientcert,
+                    SSL_passwd_cb=>\sub { return $np->opts->clientpass; },
+                    Timeout=>$np->opts->timeout,
+                );
+            }
+            printf("host=%s addr=%s port=%d error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, $@, $SSL_ERROR) if $np->opts->verbose;
+            my $prefix = $np->opts->dynamic ? '['.$server->{host}.'] ' : '';
+            if ($@) {
+                $np->add_message(CRITICAL, $prefix.$@);
+            } elsif ($SSL_ERROR) {
+                $np->add_message(CRITICAL, $prefix.$SSL_ERROR);
+            } else {
+                $np->add_message(OK, $prefix.($np->opts->skipssl?'':'SSL ').'Connect OK');
+            }
+        }
+    }
+}
+
+my ($code, $message) = $np->check_messages('join'=>"\n");
+$np->plugin_exit( $code, $message );
