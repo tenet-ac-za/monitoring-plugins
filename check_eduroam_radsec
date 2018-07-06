@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
-# @copyright Copyright (c) 2018, SAFIRE - South African Identity Federation
+# @copyright Copyright (c) 2018, Tertiary Education and Research Network of South Africa
 # @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 #
 use strict;
@@ -9,10 +9,25 @@ use Monitoring::Plugin;
 use Net::DNS;
 use IO::Socket::INET6;
 use IO::Socket::SSL;
+ use Time::HiRes qw(time);
 
-sub findDynamicRadsec($) {
+sub sortSrvRecords($$)
+{
+    my ($a, $b) = @_;
+    if ($a->{priority} == $b->{priority}) {
+        # This is quite crude, since it's more like priority than weight
+        return $b->{weight} <=> $a->{weight};
+    } else {
+        return $a->{priority} <=> $b->{priority};
+    }
+}
+
+sub findDynamicRadsec($)
+{
     my ($np) = @_;
     my $res = Net::DNS::Resolver->new;
+    print "++ Starting dynamic discovery\n" if $np->opts->verbose;
+    my $t0 = time;
 
     # Find the eduroam NAPTR records
     my @srvs;
@@ -27,6 +42,7 @@ sub findDynamicRadsec($) {
         push @srvs, $rr->replacement;
     }
     $np->add_message($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No x-eduroam:radius.tls NAPTR records found') unless @srvs;
+    $np->add_perfdata('label'=>'naptrs', 'value'=>($#srvs+1), 'min'=>0);
     $np->add_message(CRITICAL, 'More than one x-eduroam:radius.tls NAPTR record found.') if @srvs and $#srvs > 1;
 
     # Find the corresponding SRV records
@@ -51,12 +67,12 @@ sub findDynamicRadsec($) {
                     $cname->print if $np->opts->verbose;
                 }
             }
-            
+
             my $aaaa = $res->query($rr->target, 'AAAA');
             if ($aaaa) {
                 foreach my $aaaarr (grep { $_->type eq 'AAAA' } $aaaa->answer) {
                     $aaaarr->print if $np->opts->verbose;
-                    push @targets, { 'host'=>$rr->target, 'addr'=>$aaaarr->address, 'port'=>$rr->port };
+                    push @targets, { 'host'=>$rr->target, 'addr'=>$aaaarr->address, 'port'=>$rr->port, 'priority'=>$rr->priority, 'weight'=>$rr->weight };
                 }
             }
 
@@ -64,10 +80,10 @@ sub findDynamicRadsec($) {
             if ($a) {
                 foreach my $arr (grep { $_->type eq 'A' } $a->answer) {
                     $arr->print if $np->opts->verbose;
-                    push @targets, { 'host'=>$rr->target, 'addr'=>$arr->address, 'port'=>$rr->port };
+                    push @targets, { 'host'=>$rr->target, 'addr'=>$arr->address, 'port'=>$rr->port, 'priority'=>$rr->priority, 'weight'=>$rr->weight };
                 }
             }
-            
+
             if (@targets) {
                 @mergedservers = (@mergedservers, @targets);
             } else {
@@ -76,19 +92,32 @@ sub findDynamicRadsec($) {
         }
         $np->add_perfdata('label'=>'srvs', 'value'=>$srvcount, 'min'=>0);
     }
-    return @mergedservers;
+    $np->add_perfdata('label'=>'dns_lookups', 'value'=>sprintf('%0.3f',time-$t0), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
+    return sort sortSrvRecords @mergedservers;
 }
-
+#
+# -------------------------------------------------------------------------
+#
 my $np = Monitoring::Plugin->new(
-    'usage' => 'Usage: %s -H <host> [-t <timeout>]',
+    'usage' => 'Usage: %s -H <host> [-t <timeout>] [-D]',
     'version' => '0.1',
     'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'shortname' => 'RadSec',
     'blurb' => "A simple plugin to check an eduroam RadSec server",
     'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
-    'extra' => 
+    'extra' =>
 "
-This plugin allows us to test RadSec
+This plugin implements the eduroam dynamic discovery protocol using NAPTR
+and SRV records, and allows us to compare the resulting replacements and
+targets against known-good values.
+
+The resulting dynamically configured servers (or the specified hostname if
+dynamic discovery is not used) are then optionally checked to ensure they
+can establish a valid SSL session with the right server and client
+certificates.
+
+No RADIUS-level protocol checks are done; the test returns OK if a secure
+transport layer can be established.
 ",
 );
 $np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
@@ -118,21 +147,24 @@ if ($np->opts->dynamic) {
     @radsecservers = findDynamicRadsec($np);
 } else {
     $np->add_perfdata('label'=>'dynamic', 'value'=>0, 'min'=>0,'max'=>1);
-    push @radsecservers, {'host'=>$np->opts->host, 'addr'=>$np->opts->host, 'port'=>$np->opts->port};
+    push @radsecservers, {'host'=>$np->opts->host, 'addr'=>$np->opts->host, 'port'=>$np->opts->port, 'priority'=>1, 'weight'=>1};
 }
 
-$np->add_perfdata('label'=>'servers', 'value'=>($#radsecservers+1), 'min'=>0);
+$np->add_perfdata('label'=>'servers', 'value'=>($#radsecservers+1), 'min'=>0);  # unique host/port tuples
 unless (@radsecservers) {
     $np->add_message(CRITICAL, 'No RADIUS servers found to query');
 } else {
     if ($np->opts->skiptcp) {
         if ($np->opts->dynamic) {
-            $np->add_message(OK, ($#radsecservers+1) . ' servers found via dynamic discovery');
+            $np->add_message(OK, 'Dynamic discovery found: '.join(', ', map {$_->{host}.($_->{port}!=2083?':'.$_->{port}:'')} @radsecservers));
         } else {
-             $np->add_message(OK, 'connection tests skipped');
+            $np->add_message(OK, 'Connection tests skipped');
         }
     } else {
+        my $t1 = time;
         foreach my $server (@radsecservers) {
+            my $t2 = time;
+            printf("++ Starting RADIUS server checks for %s\n",$server->{host}) if $np->opts->verbose;
             my $client;
             if ($np->opts->skipssl) {
                 print "using IO::Socket::INET6\n" if $np->opts->verbose;
@@ -156,8 +188,8 @@ unless (@radsecservers) {
                     Timeout=>$np->opts->timeout,
                 );
             }
-            printf("host=%s addr=%s port=%d error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, $@, $SSL_ERROR) if $np->opts->verbose;
-            my $prefix = $np->opts->dynamic ? '['.$server->{host}.'] ' : '';
+            printf("host=%s addr=%s port=%d error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, $@?$@:'', $SSL_ERROR) if $np->opts->verbose;
+            my $prefix = $np->opts->dynamic ? '['.$server->{host}.($server->{port}!=2083?':'.$server->{port}:'').'] ' : '';
             if ($@) {
                 $np->add_message(CRITICAL, $prefix.$@);
             } elsif ($SSL_ERROR) {
@@ -165,9 +197,12 @@ unless (@radsecservers) {
             } else {
                 $np->add_message(OK, $prefix.($np->opts->skipssl?'':'SSL ').'Connect OK');
             }
+            $np->add_perfdata('label'=>'connect/'.$server->{host}, 'value'=>sprintf('%0.3f',time-$t2), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
         }
+        $np->add_perfdata('label'=>'connect', 'value'=>sprintf('%0.3f',time-$t1), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
     }
 }
 
+print "++ Returning test results\n" if $np->opts->verbose;
 my ($code, $message) = $np->check_messages('join'=>"\n");
 $np->plugin_exit( $code, $message );
