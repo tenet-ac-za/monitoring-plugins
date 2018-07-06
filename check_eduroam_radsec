@@ -9,7 +9,7 @@ use Monitoring::Plugin;
 use Net::DNS;
 use IO::Socket::INET6;
 use IO::Socket::SSL;
- use Time::HiRes qw(time);
+use Time::HiRes qw(time);
 
 sub sortSrvRecords($$)
 {
@@ -36,8 +36,9 @@ sub findDynamicRadsec($)
 
     foreach my $rr (grep { $_->type eq 'NAPTR' } $naptr->answer) {
         next unless lc($rr->service) eq 'x-eduroam:radius.tls';
-        $np->add_message(CRITICAL, 'x-eduroam:radius.tls NAPTR record must have the "S" flag') unless uc($rr->flags) eq 'S';
         $rr->print if $np->opts->verbose;
+        $np->add_message(CRITICAL, 'x-eduroam:radius.tls NAPTR record must have the "S" flag') unless uc($rr->flags) eq 'S';
+        $np->add_message(CRITICAL, 'x-eduroam:radius.tls NAPTR record must not have a regexp set') unless uc($rr->regexp) eq '';
         $np->add_message(WARNING, 'NAPTR replacement '.$rr->replacement.' is not expected') if ($np->opts->replacement and not grep { lc($_) eq lc($rr->replacement)} @{$np->opts->replacement});
         push @srvs, $rr->replacement;
     }
