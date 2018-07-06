@@ -150,6 +150,7 @@ $ua->timeout($np->opts->timeout);
 $ua->cookie_jar({});
 $ua->agent('check_saml_sso/' . $VERSION . ' ' . $ua->_agent);
 $ua->ssl_opts('SSL_verify_callback' => \&SSL_verify_callback);
+$ua->ssl_opts('SSL_ca_path' => '/etc/ssl/certs');
 push @{ $ua->requests_redirectable }, 'POST';
 
 # Phase 1: SP -> SSO

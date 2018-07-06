@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
-# @copyright Copyright (c) 2017, SAFIRE - South African Identity Federation
+# @copyright Copyright (c) 2017, Tertiary Education and Research Network of South Africa
 # @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 #
 use strict;

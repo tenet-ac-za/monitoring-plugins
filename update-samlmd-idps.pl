@@ -326,5 +326,3 @@ A list of email addresses that should never receive notifications.
 =head1 LICENSE
 
 This software is released under an MIT license.
-
-

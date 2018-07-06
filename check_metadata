@@ -53,6 +53,7 @@ print STDERR "Set URI to $uri\n" if $np->opts->verbose;
 # Fetch the metadata XML file
 my $ua = LWP::UserAgent->new;
 $ua->timeout($np->opts->timeout);
+$ua->ssl_opts('SSL_ca_path' => '/etc/ssl/certs');
 my $res = $ua->get($uri, 'Host' => $np->opts->host);
 $np->plugin_die("Timeout!") if $res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
 if (!$res->is_success()) {
@@ -87,7 +88,7 @@ if ($np->opts->xmlsig) {
         $np->add_message(CRITICAL, "XML signature validation failed");
     }
     close($fh);
-    unlink($filename) if -f $filename;
+    unlink($filename) if -f $filename and not $np->opts->verbose;
 }
 
 # Create an XPath object with the right namespaces
