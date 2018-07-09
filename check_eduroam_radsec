@@ -9,6 +9,7 @@ use Monitoring::Plugin;
 use Net::DNS;
 use IO::Socket::INET6;
 use IO::Socket::SSL;
+use IO::Socket::SSL::Utils;
 use Time::HiRes qw(time);
 
 sub sortSrvRecords($$)
@@ -129,15 +130,21 @@ $np->add_arg('spec' => 'replacement|R=s@', 'help' => 'Replacement to expect in N
 $np->add_arg('spec' => 'port|p=i', 'help' => 'RadSec port we should use or expect in SRV records (default 2083).', 'default' => 2083);
 $np->add_arg('spec' => 'skiptcp|S', 'help' => 'Don\'t try connect to RADIUS server');
 $np->add_arg('spec' => 'skipssl|L', 'help' => 'Don\'t try start an SSL session');
-$np->add_arg('spec' => 'rootcert|r=s', 'help' => 'root certificate or directory to be used for', 'label'=>'file');
-$np->add_arg('spec' => 'clientcert|C=s', 'help' => 'use client certificate to authenticate', 'label'=>'file');
+$np->add_arg('spec' => 'rootcert|r=s', 'help' => 'root certificate or directory to be used for', 'label' => 'file');
+$np->add_arg('spec' => 'clientcert|C=s', 'help' => 'use client certificate to authenticate', 'label' => 'file');
 $np->add_arg('spec' => 'clientpass=s', 'help' => 'set passphrase for client certificate');
-$np->add_arg('spec' => 'clientkey|K=s', 'help' => 'use client private key to authenticate', 'label'=>'file');
+$np->add_arg('spec' => 'clientkey|K=s', 'help' => 'use client private key to authenticate', 'label' => 'file');
+$np->add_arg('spec' => 'issuer|i=s', 'help' => 'match peer certificate issuer');
+$np->add_arg('spec' => 'cn|n=s', 'help' => 'match the CN of the certificate');
+$np->add_arg('spec' => 'warning|w=i', 'help' => 'minimum number of days a certificate has to be valid to issue a warning status', 'label' => 'days');
+$np->add_arg('spec' => 'critical|c=i', 'help' => 'minimum number of days a certificate has to be valid to issue a critical status', 'label' => 'days');
 $np->getopts;
 
 # check the nonaptr states
 $np->plugin_die('"'.$np->opts->nonaptr.'" is not a valid exit status. Must be one of ['.join(',', keys %Monitoring::Plugin::ERRORS).']')
     unless (grep { $_ eq $np->opts->nonaptr} keys %Monitoring::Plugin::ERRORS);
+$np->plugin_die('Certificate --critical must be less than --warning')
+    if $np->opts->warning and $np->opts->critical and $np->opts->warning <= $np->opts->critical;
 
 alarm $np->opts->timeout;
 
@@ -176,7 +183,6 @@ unless (@radsecservers) {
                     Type => SOCK_STREAM,
                     Timeout=>$np->opts->timeout,
                 );
-                $SSL_ERROR='';
             } else {
                 print "using IO::Socket::SSL\n" if $np->opts->verbose;
                 $client = IO::Socket::SSL->new(
@@ -189,14 +195,39 @@ unless (@radsecservers) {
                     Timeout=>$np->opts->timeout,
                 );
             }
-            printf("host=%s addr=%s port=%d error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, $@?$@:'', $SSL_ERROR) if $np->opts->verbose;
+            printf("host=%s addr=%s port=%d error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, $@?$@:'', $SSL_ERROR?$SSL_ERROR:'') if $np->opts->verbose;
             my $prefix = $np->opts->dynamic ? '['.$server->{host}.($server->{port}!=2083?':'.$server->{port}:'').'] ' : '';
             if ($@) {
                 $np->add_message(CRITICAL, $prefix.$@);
             } elsif ($SSL_ERROR) {
                 $np->add_message(CRITICAL, $prefix.$SSL_ERROR);
             } else {
-                $np->add_message(OK, $prefix.($np->opts->skipssl?'':'SSL ').'Connect OK');
+                if ($np->opts->skipssl) {
+                    $np->add_message(OK, $prefix.'Connect OK');
+                } else {
+                    my $cert = CERT_asHash($client->peer_certificate());
+                    if ($np->opts->issuer and $cert->{issuer}->{commonName} ne $np->opts->issuer) {
+                        $np->add_message(CRITICAL, 'Peer certificate issuer "'.$cert->{issuer}->{commonName}.'" is not expected');
+                    }
+                    if ($np->opts->cn and $cert->{subject}->{commonName} ne $np->opts->cn) {
+                        $np->add_message(CRITICAL, 'Peer certificate CN "'.$cert->{subject}->{commonName}.'" is not expected');
+                    }
+
+                    if ($np->opts->verbose and $np->opts->verbose > 1) {
+                        use Data::Dumper;
+                        print Dumper($cert);
+                    }
+                    # check certificate expiry details
+                    my $days = int(($cert->{not_after}-time)/86400);
+                    if ($np->opts->critical and $days <= $np->opts->critical) {
+                        $np->add_message(CRITICAL, sprintf('Client certificate expires in %d days', $days));
+                    } elsif ($np->opts->warning and $days <= $np->opts->warning) {
+                        $np->add_message(WARNING, sprintf('Client certificate expires in %d days', $days));
+                    }
+                    $np->add_perfdata('label'=>'expires', 'value'=>$days, 'min'=>0, 'warning'=>$np->opts->warning, 'critical'=>$np->opts->critical);
+
+                    $np->add_message(OK, sprintf('%sSSL Connect OK (authority=%s, expires=%dd)', $prefix, $cert->{issuer}->{commonName}, $days));
+                }
             }
             $np->add_perfdata('label'=>'connect/'.$server->{host}, 'value'=>sprintf('%0.3f',time-$t2), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
         }
@@ -205,5 +236,5 @@ unless (@radsecservers) {
 }
 
 print "++ Returning test results\n" if $np->opts->verbose;
-my ($code, $message) = $np->check_messages('join'=>"\n");
+my ($code, $message) = $np->check_messages('join_all'=>"\n");
 $np->plugin_exit( $code, $message );
