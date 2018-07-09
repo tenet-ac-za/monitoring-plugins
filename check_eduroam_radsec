@@ -44,7 +44,7 @@ sub findDynamicRadsec($)
         push @srvs, $rr->replacement;
     }
     $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No x-eduroam:radius.tls NAPTR records found') unless @srvs;
-    $np->add_perfdata('label'=>'naptrs', 'value'=>($#srvs+1), 'min'=>0);
+    $np->add_perfdata('label'=>'naptrs', 'value'=>($#srvs+1), 'min'=>0) unless $np->opts->noperfdata;
     $np->add_message(CRITICAL, 'More than one x-eduroam:radius.tls NAPTR record found.') if @srvs and $#srvs > 1;
 
     # Find the corresponding SRV records
@@ -92,9 +92,9 @@ sub findDynamicRadsec($)
                 $np->add_message(CRITICAL, 'SRV target '.$rr->target.' did not resolve to any valid IP addresses');
             }
         }
-        $np->add_perfdata('label'=>'srvs', 'value'=>$srvcount, 'min'=>0);
+        $np->add_perfdata('label'=>'srvs', 'value'=>$srvcount, 'min'=>0) unless $np->opts->noperfdata;
     }
-    $np->add_perfdata('label'=>'dns_lookups', 'value'=>sprintf('%0.3f',time-$t0), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
+    $np->add_perfdata('label'=>'dns_lookups', 'value'=>sprintf('%0.3f',time-$t0), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s') unless $np->opts->noperfdata;
     return sort sortSrvRecords @mergedservers;
 }
 #
@@ -138,6 +138,7 @@ $np->add_arg('spec' => 'issuer|i=s', 'help' => 'match peer certificate issuer');
 $np->add_arg('spec' => 'cn|n=s', 'help' => 'match the CN of the certificate');
 $np->add_arg('spec' => 'warning|w=i', 'help' => 'minimum number of days a certificate has to be valid to issue a warning status', 'label' => 'days');
 $np->add_arg('spec' => 'critical|c=i', 'help' => 'minimum number of days a certificate has to be valid to issue a critical status', 'label' => 'days');
+$np->add_arg('spec' => 'noperfdata', 'help' => 'disable performance data output');
 $np->getopts;
 
 # check the nonaptr states
@@ -151,14 +152,14 @@ alarm $np->opts->timeout;
 # Find the RADIUS servers
 my @radsecservers;
 if ($np->opts->dynamic) {
-    $np->add_perfdata('label'=>'dynamic', 'value'=>1, 'min'=>0,'max'=>1);
+    $np->add_perfdata('label'=>'dynamic', 'value'=>1, 'min'=>0,'max'=>1) unless $np->opts->noperfdata;
     @radsecservers = findDynamicRadsec($np);
 } else {
-    $np->add_perfdata('label'=>'dynamic', 'value'=>0, 'min'=>0,'max'=>1);
+    $np->add_perfdata('label'=>'dynamic', 'value'=>0, 'min'=>0,'max'=>1) unless $np->opts->noperfdata;
     push @radsecservers, {'host'=>$np->opts->host, 'addr'=>$np->opts->host, 'port'=>$np->opts->port, 'priority'=>1, 'weight'=>1};
 }
 
-$np->add_perfdata('label'=>'servers', 'value'=>($#radsecservers+1), 'min'=>0);  # unique host/port tuples
+$np->add_perfdata('label'=>'servers', 'value'=>($#radsecservers+1), 'min'=>0) unless $np->opts->noperfdata;  # unique host/port tuples
 unless (@radsecservers) {
     $np->add_message(CRITICAL, 'No RADIUS servers found to query');
 } else {
@@ -224,14 +225,14 @@ unless (@radsecservers) {
                     } elsif ($np->opts->warning and $days <= $np->opts->warning) {
                         $np->add_message(WARNING, sprintf('Client certificate expires in %d days', $days));
                     }
-                    $np->add_perfdata('label'=>'expires', 'value'=>$days, 'min'=>0, 'warning'=>$np->opts->warning, 'critical'=>$np->opts->critical);
+                    $np->add_perfdata('label'=>'expires', 'value'=>$days, 'min'=>0, 'warning'=>$np->opts->warning, 'critical'=>$np->opts->critical) unless $np->opts->noperfdata;
 
                     $np->add_message(OK, sprintf('%sSSL Connect OK (authority=%s, expires=%dd)', $prefix, $cert->{issuer}->{commonName}, $days));
                 }
             }
-            $np->add_perfdata('label'=>'connect/'.$server->{host}, 'value'=>sprintf('%0.3f',time-$t2), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
+            $np->add_perfdata('label'=>'connect/'.$server->{host}, 'value'=>sprintf('%0.3f',time-$t2), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s') unless $np->opts->noperfdata;
         }
-        $np->add_perfdata('label'=>'connect', 'value'=>sprintf('%0.3f',time-$t1), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s');
+        $np->add_perfdata('label'=>'connect', 'value'=>sprintf('%0.3f',time-$t1), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s') unless $np->opts->noperfdata;
     }
 }
 
