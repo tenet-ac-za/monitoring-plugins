@@ -26,14 +26,21 @@ sub sortSrvRecords($$)
 sub findDynamicRadsec($)
 {
     my ($np) = @_;
-    my $res = Net::DNS::Resolver->new;
+    my $res = Net::DNS::Resolver->new('udp_timeout'=>$np->opts->{'dns-udp-timeout'}, 'tcp_timeout'=>$np->opts->{'dns-tcp-timeout'});
     print "++ Starting dynamic discovery\n" if $np->opts->verbose;
+    printf("UDP timeout: %d; TCP timeout: %d\n", $res->udp_timeout?$res->udp_timeout:-1, $res->tcp_timeout) if $np->opts->verbose;
     my $t0 = time;
 
     # Find the eduroam NAPTR records
     my @srvs;
     my $naptr = $res->query($np->opts->host, 'NAPTR');
-    $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No NAPTR records found') unless $naptr;
+    unless ($naptr) {
+        if (not defined $res->errorstring or $res->errorstring eq 'NOERROR') {
+            $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No NAPTR records found');
+        } else {
+            $np->plugin_exit(UNKNOWN, 'DNS error whilst resolving NAPTR record: '.$res->errorstring);
+        }
+    }
 
     foreach my $rr (grep { $_->type eq 'NAPTR' } $naptr->answer) {
         next unless lc($rr->service) eq 'x-eduroam:radius.tls';
@@ -51,7 +58,7 @@ sub findDynamicRadsec($)
     my @mergedservers;
     my $srv = $res->query($srvs[0], 'SRV');
     unless ($srv) {
-        $np->add_message(CRITICAL, 'SRV record "'.$srvs[0].'" did not resolve');
+        $np->add_message(CRITICAL, 'SRV record "'.$srvs[0].'" did not resolve: '.$res->errorstring);
     } else {
 
         my $srvcount=0;
@@ -139,6 +146,8 @@ $np->add_arg('spec' => 'cn|n=s', 'help' => 'match the CN of the certificate');
 $np->add_arg('spec' => 'warning|w=i', 'help' => 'minimum number of days a certificate has to be valid to issue a warning status', 'label' => 'days');
 $np->add_arg('spec' => 'critical|c=i', 'help' => 'minimum number of days a certificate has to be valid to issue a critical status', 'label' => 'days');
 $np->add_arg('spec' => 'noperfdata', 'help' => 'disable performance data output');
+$np->add_arg('spec' => 'dns-tcp-timeout=i', 'help' => 'DNS resolver TCP timeout (default 7 seconds)', 'label' => 'seconds', 'default' => 7);
+$np->add_arg('spec' => 'dns-udp-timeout=i', 'help' => 'DNS resolver UDP timeout', 'label' => 'seconds');
 $np->getopts;
 
 # check the nonaptr states
