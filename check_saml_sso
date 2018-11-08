@@ -7,12 +7,13 @@ use strict;
 use warnings;
 use Monitoring::Plugin;
 use LWP::UserAgent;
+use HTTP::Request;
 use URI;
 use Time::HiRes qw(time);
 use Date::Parse;
 use POSIX;
 use vars qw ($hopCount);
-our $VERSION = '0.2';
+our $VERSION = '0.3';
 
 # verify the certificate date
 sub SSL_verify_callback
@@ -33,64 +34,71 @@ sub SSL_verify_callback
     return 1;
 }
 
-sub metadataMissing($$)
-{
-    my ($res, $np) = @_;
-    if ($res->code == HTTP::Status::HTTP_INTERNAL_SERVER_ERROR) {
-        # Special cases to match specific software (e.g. SimpleSAMLphp)
-        if ($res->decoded_content =~ m/metadata.*expired/si) {
-            $np->add_message(CRITICAL, 'IdP appears have out-of-date federation metadata (expired?)');
-        } elsif ($res->decoded_content =~ m/metadata.*(missing|not\s+found)/si) {
-            $np->add_message(CRITICAL, 'IdP appears to be missing federation metadata (not found?)');
-        }
-    }
-}
-
-sub checkForPOST
-{
-    my ($response, $ua, $np) = @_;
-    my ($samlrequestfield) = $response->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLRequest[^>]+\>)/si;
-    if (defined $samlrequestfield and $samlrequestfield) {
-        my ($samlrequest) = $samlrequestfield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-        my ($method) = $response->decoded_content() =~ m/\<form\s+[^>]*method=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-        my ($action) = $response->decoded_content() =~ m/\<form\s+[^>]*action=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-        print STDERR "Phase 1.5: POST to " . $action . " using HTTP " . $method . "\n" if $np->opts->verbose;
-        $np->add_message(OK, "POST to " . $action);
-
-        my $res = $ua->post($action, 'Content' => {
-            'SAMLRequest' => $samlrequest,
-        });
-        $np->plugin_die("Phase 1.5 Timeout!") if $res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
-        foreach my $r ($res->redirects) {
-            next if $r->request->uri->eq($action);
-            $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
-            print STDERR "Phase 1.5: Redirected to " . $r->request->uri . "\n" if $np->opts->verbose;
-            $hopCount++;
-        }
-        unless ($res->request->uri->eq($action)) {
-            $np->add_message(OK, "Redirected to " . cleanURI($res->request->uri));
-            print STDERR "Phase 1.5: Redirected to " . $res->request->uri . "\n" if $np->opts->verbose;
-            $hopCount++;
-        }
-        if (!$res->is_success()) {
-            metadataMissing($res, $np);
-            $np->add_message(CRITICAL, 'Proxy HTTP ' . $res->code . ' ' . $res->message);
-            my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
-            $np->plugin_exit($code, $message);
-        }
-        print STDERR "Phase 1.5: HTTP response " . $res->code . "\n" if $np->opts->verbose;
-
-        return checkForPOST($res, $ua, $np);
-    }
-    return $response;
-}
-
 sub cleanURI($)
 {
     my $uri = URI->new(shift);
     $uri->query(undef);
     $uri->fragment(undef);
     return $uri->as_string;
+}
+
+sub recurseRedirects($$$;$$);
+sub recurseRedirects($$$;$$)
+{
+    my ($np, $ua, $uri, $method, $postdata) = @_;
+    my ($ret);
+
+    if ($hopCount++ > 15) {
+        $np->plugin_die('Phase 1 too many redirects');
+    }
+
+    my $req = new HTTP::Request;
+    $req->method(defined ($method) ? $method : 'GET');
+    $req->uri($uri);
+
+    if ($req->method eq 'POST') {
+        $req->header('Content-Type' => 'application/x-www-form-urlencoded');
+        $req->content($postdata)    
+    }
+
+    print STDERR "Phase 1: Request " . $req->as_string . "\n" if $np->opts->verbose;
+    my $res = $ua->simple_request($req);
+
+    if ($res->is_error) {
+        if ($res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT) {
+            $np->plugin_die("Phase 1 Timeout!") ;
+        } elsif ($res->code == HTTP::Status::HTTP_INTERNAL_SERVER_ERROR) {
+            # Special cases to match specific software (e.g. SimpleSAMLphp)
+            if ($res->decoded_content =~ m/metadata.*expired/si) {
+                $np->add_message(CRITICAL, 'IdP appears have out-of-date federation metadata (expired?)');
+            } elsif ($res->decoded_content =~ m/metadata.*(missing|not\s+found)/si) {
+                $np->add_message(CRITICAL, 'IdP appears to be missing federation metadata (not found?)');
+            }
+        }
+        $np->add_message(WARNING, 'Unexpected ' . $res->status_line . ' response at ' . cleanURI($uri));
+        $ret = $res; # break condition
+
+    } elsif ($res->is_redirect) {
+        my $new_uri = $res->header('location');
+        $np->plugin_die('Phase 1 redirect loop at '.$new_uri) if $res->request->uri->eq($new_uri);
+        $np->add_message(OK, "Redirected to " . cleanURI($new_uri));
+        print STDERR "Phase 1: Redirected to " . $new_uri . "\n" if $np->opts->verbose;
+        $ret = recurseRedirects($np, $ua, $new_uri, 'GET');
+
+    } elsif ($res->is_success) {
+        my ($samlrequestfield) = $res->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLRequest[^>]+\>)/si;
+        if (defined $samlrequestfield and $samlrequestfield) {
+            my ($samlrequest) = $samlrequestfield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+            my ($method) = $res->decoded_content() =~ m/\<form\s+[^>]*method=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+            my ($action) = $res->decoded_content() =~ m/\<form\s+[^>]*action=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+            print STDERR "Phase 1.5: POST to " . $action . " using HTTP " . $method . "\n" if $np->opts->verbose;
+            $np->add_message(OK, "POST to " . $action);
+            $ret = recurseRedirects($np, $ua, $action, 'POST', {'SAMLRequest' => $samlrequest,});
+        } else {
+            $ret = $res; # break condition
+        }
+    }
+    return $ret;
 }
 
 our $np = Monitoring::Plugin->new(
@@ -123,7 +131,7 @@ my $userfield = scalar $np->opts->userfield;
 my $passfield = scalar $np->opts->passfield;
 
 # perfdata
-$hopCount = 0;
+$hopCount = -1;
 our $startTime = time();
 
 # check metadata certificate expiry (hard-coded into config)
@@ -148,48 +156,24 @@ $np->add_message(OK, "Initiate SSO at " . cleanURI($uri));
 my $ua = LWP::UserAgent->new;
 $ua->timeout($np->opts->timeout);
 $ua->cookie_jar({});
-$ua->agent('check_saml_sso/' . $VERSION . ' ' . $ua->_agent);
+$ua->agent('Mozilla/5.0 (X11; Linux x86_64) check_saml_sso/' . $VERSION . ' ' . $ua->_agent);
 $ua->ssl_opts('SSL_verify_callback' => \&SSL_verify_callback);
 $ua->ssl_opts('SSL_ca_path' => '/etc/ssl/certs');
-push @{ $ua->requests_redirectable }, 'POST';
 
 # Phase 1: SP -> SSO
-my $res1 = $ua->get($uri, 'Host' => $np->opts->host);
-$np->plugin_die("Phase 1 Timeout!") if $res1->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
-if (scalar $res1->redirects() < 2) {
-    $np->plugin_exit(CRITICAL, 'Phase 1: Should have been redirected');
-}
-foreach my $r ($res1->redirects) {
-    next if $r->request->uri->eq($uri);
-    $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
-    print STDERR "Phase 1: Redirected to " . $r->request->uri . "\n" if $np->opts->verbose;
-    $hopCount++;
-}
-unless ($res1->request->uri->eq($uri)) {
-    $np->add_message(OK, "Redirected to " . cleanURI($res1->request->uri));
-    print STDERR "Phase 1: Redirected to " . $res1->request->uri . "\n" if $np->opts->verbose;
-    $hopCount++;
-}
-if (!$res1->is_success()) {
-    metadataMissing($res1, $np);
-    $np->add_message(CRITICAL, 'SSO Redirect HTTP ' . $res1->code . ' ' . $res1->message);
-    my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
-    $np->plugin_exit($code, $message);
-}
-print STDERR "Phase 1: HTTP response " . $res1->code . "\n" if $np->opts->verbose;
-
-my $res2 = checkForPOST($res1, $ua, $np);
+my $res = recurseRedirects($np, $ua, $uri);
 
 # Phase 2: SSO Login
 
-unless ($res2->is_success) {
-    metadataMissing($res2, $np);
-    $np->add_message(CRITICAL, 'SSO Login Page HTTP ' . $res1->code . ' ' . $res1->message);
+unless ($res->is_success) {
+    $np->add_message(CRITICAL, 'SSO Login Page HTTP ' . $res->code . ' ' . $res->message);
     my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
     $np->plugin_exit($code, $message);
 }
 
-if ($res2->decoded_content =~ m/$userfield/i) {
+print STDERR $res->decoded_content . "\n" if $np->opts->verbose > 1;
+
+if ($res->decoded_content =~ m/$userfield/i) {
     $np->add_message(OK, "Userfield found matching: " . $userfield);
 } else {
     $np->add_message(WARNING, "NO userfield found matching: " . $userfield);
@@ -199,21 +183,21 @@ if ($res2->decoded_content =~ m/$userfield/i) {
 if ($np->opts->redirectonly) {
     my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
     if ($code == OK) {
-        $message = "Login page found at " . cleanURI($res2->request->uri) . "\n\n" . $message;
+        $message = "Login page found at " . cleanURI($res->request->uri) . "\n\n" . $message;
     }
     $np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 3);
     $np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
     $np->plugin_exit($code, $message);
 }
 
-my ($authstatefield) = $res2->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
+my ($authstatefield) = $res->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
 $np->plugin_exit(CRITICAL, 'Phase 2: AuthState field missing') unless defined $authstatefield;
 my ($authstate) = $authstatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
 $np->plugin_exit(CRITICAL, 'Phase 2: AuthState missing') unless defined $authstate;
 
 print STDERR "Phase 2: AuthState " . $authstate . "\n" if $np->opts->verbose > 1;
 
-my $res3 = $ua->post($res2->request->uri, 'Content' => {
+my $res3 = $ua->post($res->request->uri, 'Content' => {
     $np->opts->userfield => $np->opts->user,
     $np->opts->passfield => $np->opts->pass,
     $np->opts->orgfield => $np->opts->org,
@@ -221,11 +205,11 @@ my $res3 = $ua->post($res2->request->uri, 'Content' => {
 });
 $np->plugin_die("Phase 2 Timeout!") if $res3->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
 foreach my $r ($res3->redirects) {
-    next if $r->request->uri->eq($res2->request->uri);
+    next if $r->request->uri->eq($res->request->uri);
     $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
     print STDERR "Phase 2: Redirected to " . $r->request->uri . "\n" if $np->opts->verbose;
 }
-unless ($res3->request->uri->eq($res2->request->uri)) {
+unless ($res3->request->uri->eq($res->request->uri)) {
     $np->add_message(OK, "Redirected to " . cleanURI($res3->request->uri));
     print STDERR "Phase 2: Redirected to " . $res3->request->uri . "\n" if $np->opts->verbose;
 }
