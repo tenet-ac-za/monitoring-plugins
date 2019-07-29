@@ -77,19 +77,23 @@ sub findDynamicRadsec($)
                 }
             }
 
-            my $aaaa = $res->query($rr->target, 'AAAA');
-            if ($aaaa) {
-                foreach my $aaaarr (grep { $_->type eq 'AAAA' } $aaaa->answer) {
-                    $aaaarr->print if $np->opts->verbose;
-                    push @targets, { 'host'=>$rr->target, 'addr'=>$aaaarr->address, 'port'=>$rr->port, 'priority'=>$rr->priority, 'weight'=>$rr->weight };
+            unless ($np->opts->ipv4) {
+                my $aaaa = $res->query($rr->target, 'AAAA');
+                if ($aaaa) {
+                    foreach my $aaaarr (grep { $_->type eq 'AAAA' } $aaaa->answer) {
+                        $aaaarr->print if $np->opts->verbose;
+                        push @targets, { 'host'=>$rr->target, 'addr'=>$aaaarr->address, 'port'=>$rr->port, 'priority'=>$rr->priority, 'weight'=>$rr->weight };
+                    }
                 }
             }
 
-            my $a = $res->query($rr->target, 'A');
-            if ($a) {
-                foreach my $arr (grep { $_->type eq 'A' } $a->answer) {
-                    $arr->print if $np->opts->verbose;
-                    push @targets, { 'host'=>$rr->target, 'addr'=>$arr->address, 'port'=>$rr->port, 'priority'=>$rr->priority, 'weight'=>$rr->weight };
+            unless ($np->opts->ipv6) {
+                my $a = $res->query($rr->target, 'A');
+                if ($a) {
+                    foreach my $arr (grep { $_->type eq 'A' } $a->answer) {
+                        $arr->print if $np->opts->verbose;
+                        push @targets, { 'host'=>$rr->target, 'addr'=>$arr->address, 'port'=>$rr->port, 'priority'=>$rr->priority, 'weight'=>$rr->weight };
+                    }
                 }
             }
 
@@ -109,7 +113,7 @@ sub findDynamicRadsec($)
 #
 my $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s -H <host> [-t <timeout>] [-D]',
-    'version' => '0.1',
+    'version' => '0.2',
     'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'shortname' => 'RadSec',
     'blurb' => "A simple plugin to check an eduroam RadSec server",
@@ -129,7 +133,7 @@ No RADIUS-level protocol checks are done; the test returns OK if a secure
 transport layer can be established.
 ",
 );
-$np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
+$np->add_arg('spec' => 'host|hostname|H=s', 'help' => 'Hostname to use', 'required' => 1);
 $np->add_arg('spec' => 'dynamic|D', 'help' => 'Use dynamic discovery via NAPTR/SRV');
 $np->add_arg('spec' => 'nonaptr|N=s', 'help' => 'Status to return when a NAPTR record is not found during dynamic discovery (defaults to WARNING).', 'default' => 'WARNING', 'label'=>'['.join(',', keys %Monitoring::Plugin::ERRORS).']');
 $np->add_arg('spec' => 'target|T=s@', 'help' => 'Target host to expect in SRV records for dynamic discovery (can be specified multiple times)');
@@ -148,6 +152,8 @@ $np->add_arg('spec' => 'critical|c=i', 'help' => 'minimum number of days a certi
 $np->add_arg('spec' => 'noperfdata', 'help' => 'disable performance data output');
 $np->add_arg('spec' => 'dns-tcp-timeout=i', 'help' => 'DNS resolver TCP timeout (default 7 seconds)', 'label' => 'seconds', 'default' => 7);
 $np->add_arg('spec' => 'dns-udp-timeout=i', 'help' => 'DNS resolver UDP timeout', 'label' => 'seconds');
+$np->add_arg('spec' => 'ipv4|4', 'help' => 'Use IPv4 A records only', 'default' => 0);
+$np->add_arg('spec' => 'ipv6|6', 'help' => 'Use IPv6 AAAA records only', 'default' => 0);
 $np->getopts;
 
 # check the nonaptr states
@@ -192,6 +198,7 @@ unless (@radsecservers) {
                     Proto=>'tcp',
                     Type => SOCK_STREAM,
                     Timeout=>$np->opts->timeout,
+                    Domain=>($np->opts->ipv4 ? AF_INET : ( $np->opts->ipv6 ? AF_INET6 : AF_UNSPEC)),
                 );
             } else {
                 print "using IO::Socket::SSL\n" if $np->opts->verbose;
@@ -203,9 +210,10 @@ unless (@radsecservers) {
                     SSL_key_file=>$np->opts->clientkey?$np->opts->clientkey:$np->opts->clientcert,
                     SSL_passwd_cb=>\sub { return $np->opts->clientpass; },
                     Timeout=>$np->opts->timeout,
+                    Domain=>($np->opts->ipv4 ? AF_INET : ( $np->opts->ipv6 ? AF_INET6 : AF_UNSPEC)),
                 );
             }
-            printf("host=%s addr=%s port=%d error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, $@?$@:'', $SSL_ERROR?$SSL_ERROR:'') if $np->opts->verbose;
+            printf("host=%s addr=%s port=%d family=%s error=%s, ssl_error=%s\n", $server->{host}, $server->{addr}, $server->{port}, ($np->opts->ipv4 ? 4 : ( $np->opts->ipv6 ? 6 : '*')), $@?$@:'', $SSL_ERROR?$SSL_ERROR:'') if $np->opts->verbose;
             my $prefix = $np->opts->dynamic ? '['.$server->{host}.($server->{port}!=2083?':'.$server->{port}:'').'] ' : '';
             if ($@) {
                 $np->add_message(CRITICAL, $prefix.$@);
