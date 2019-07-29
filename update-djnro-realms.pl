@@ -127,6 +127,9 @@ while (my $realm = $sth->fetchrow_hashref) {
         next;
     }
 
+    # Clean up MSCHAPV2 for newer eapol_test
+    $realm->{'phase2'} = 'MSCHAPV2' if defined $realm->{'phase2'} and $realm->{'phase2'} =~ m/^ms-?chapv2/i;
+
     $sth_c->execute($realm->{'instid_id'});
     while (my $contact = $sth_c->fetchrow_hashref) {
         # Sanity check the contact
