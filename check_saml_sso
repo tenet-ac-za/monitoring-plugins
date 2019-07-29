@@ -166,9 +166,13 @@ my $res = recurseRedirects($np, $ua, $uri);
 # Phase 2: SSO Login
 
 unless ($res->is_success) {
-    $np->add_message(CRITICAL, 'SSO Login Page HTTP ' . $res->code . ' ' . $res->message);
+    if ($res->code == HTTP::Status::HTTP_UNAUTHORIZED) {
+        $np->add_message(WARNING, 'SSO login page uses HTTP authentiction (this is unusual)');
+    } else {
+        $np->add_message(CRITICAL, 'SSO Login Page HTTP ' . $res->code . ' ' . $res->message);
+    }
     my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
-    $np->plugin_exit($code, $message);
+    $np->plugin_exit($code, ' ' . $message);
 }
 
 print STDERR $res->decoded_content . "\n" if $np->opts->verbose > 1;
@@ -187,7 +191,7 @@ if ($np->opts->redirectonly) {
     }
     $np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 3);
     $np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
-    $np->plugin_exit($code, $message);
+    $np->plugin_exit($code, ' ' . $message);
 }
 
 my ($authstatefield) = $res->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
@@ -251,4 +255,4 @@ if ($code == OK) {
 }
 $np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 5);
 $np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
-$np->plugin_exit($code, $message);
+$np->plugin_exit($code, ' '.$message);
