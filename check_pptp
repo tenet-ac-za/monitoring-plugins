@@ -1,0 +1,199 @@
+#!/usr/bin/perl
+# Simple implementation of RFC2637 to test PPTP
+# 20140506, Guy Halse, Rhodes University
+
+use strict;
+use warnings;
+use POSIX;
+use IO::Socket::INET6;
+use Sys::Hostname;
+use Getopt::Long;
+use Time::HiRes qw(gettimeofday tv_interval);
+use vars qw($opt_V $opt_H $opt_h $opt_v $opt_p $opt_w $opt_c $opt_q $opt_4 $opt_6 $start_time $PROGNAME $VERSION);
+use lib "/omd/versions/default/lib/nagios/plugins";
+use utils qw($TIMEOUT %ERRORS &print_revision &support &usage);
+
+$ENV{PATH} = "";
+$ENV{ENV} = "";
+$PROGNAME = 'check_pptp';
+$VERSION = '0.01';
+
+sub print_usage() {
+        print "Usage: $PROGNAME [-46] -H <host> [-v] [-p <port>] [-c|-w <seconds>]\n";
+}
+sub print_help() {
+        print_revision($PROGNAME, $VERSION);
+        print_usage();
+        print "
+-H, --hostname=HOST
+  Name or IP address of the PAC to check
+-p, --port=INTEGER
+  Port that PAC is running on (defaults to 1723)
+-4
+  Use IPv4
+-6
+  Use Ipv6
+-w, --warning
+  The warning range
+-c, --critical
+  The critical range
+-v, --verbose
+  Print extra debugging information
+";
+}
+sub _return($$) {
+        my ($msg,$state) = @_;
+        my $perfdata = '';
+        if ($start_time) {
+                my ($elapsed) = tv_interval($start_time, [gettimeofday]);
+                $perfdata = sprintf('|time=%0.6fs;%s;%s;0.000000;%0.6f', $elapsed, ($opt_w ? sprintf('%0.6f', $opt_w) : ''), ($opt_c ? sprintf('%0.6f', $opt_c) : ''), $TIMEOUT);
+                if ($opt_w and $opt_w < $elapsed) {
+                        $state = 'WARNING' if $ERRORS{$state} < $ERRORS{'WARNING'};
+                }
+                if ($opt_c and $opt_c < $elapsed) {
+                        $state = 'CRITICAL' if $ERRORS{$state} < $ERRORS{'CRITICAL'};
+                }
+
+        }
+        printf "PPTP %s %s%s\n", $state, $msg, $perfdata;
+        exit $ERRORS{$state};
+}
+
+MAIN: {
+        Getopt::Long::Configure('bundling');
+        GetOptions(
+                'hostname|H=s'  => \$opt_H,
+                'help|h'        => \$opt_h,
+                'verbose|V'     => \$opt_V,
+                'version|v'     => \$opt_v,
+                'warning|w=f'   => \$opt_w,
+                'critical|c=f'  => \$opt_c,
+                'port|p=i'      => \$opt_p,
+                'usage|?'       => \$opt_q,
+                '4'             => \$opt_4,
+                '6'             => \$opt_6,
+        );
+
+        if($opt_q) { print_usage(); exit $ERRORS{'OK'}; }
+        if($opt_V) {
+                print_revision($PROGNAME, $VERSION);
+                exit $ERRORS{'OK'};
+        }
+        if($opt_h) {print_help(); exit $ERRORS{'OK'};}
+        ($opt_H) || ($opt_H = shift @ARGV) || usage("Host name/address not specified\n");
+        ($opt_p) || ($opt_p = shift @ARGV) || ($opt_p = 1723);
+        if ($opt_p !~ m/^\d+$/ or $opt_p < 1 or $opt_p > 65535) { usage("Invalid port: $opt_p\n") };
+
+        $start_time = [gettimeofday];
+
+        # Just in case of problems, let's not hang Nagios
+        $SIG{'ALRM'} = sub {
+                print "Somthing is Taking a Long Time, Increase Your TIMEOUT (Currently Set At $TIMEOUT Seconds)\n";
+                exit $ERRORS{"UNKNOWN"};
+        };
+        alarm($TIMEOUT);
+
+        # now we can do some actual work
+        printf("using %s to connect to %s port %d\n", ($opt_6 ? 'IPv6' : ($opt_4 ? 'IPv4' : 'IPv[46]')), $opt_H, $opt_p)  if ($opt_v);
+        my $socket = IO::Socket::INET6->new(
+                PeerHost => $opt_H, PeerPort => $opt_p, Proto => 'tcp',
+                Domain => ($opt_6 ? AF_INET6 : ($opt_4 ? AF_INET : AF_UNSPEC)),
+                MultiHomed => 1,
+        ) or _return("connection error: $!\n", 'CRITICAL');
+        print "socket to $opt_H port $opt_p opened\n" if ($opt_v);
+
+        # 2.1 Start-Control-Connection-Request
+        print "sending Start-Control-Connection-Request\n" if ($opt_v);
+        $socket->send( pack('nnNnnnnNNnna[64]a[64]',
+                156, 1,
+                0x1a2b3c4d,
+                1, 0,
+                0x0100, 0,
+                3,
+                0,
+                0, 1,
+                Sys::Hostname::hostname(),
+                'Rhodes University',
+        ));
+
+        # 2.2 Start-Control-Connection-Reply
+        print "waiting for Start-Control-Connection-Reply\n" if ($opt_v);
+        my ($len, $data);
+        $socket->recv($data, 2); $len = unpack('n', $data);
+        print "$opt_H indicates it has $len octets, reading\n" if ($opt_v);
+        $socket->recv($data, unpack('n', $len) - 2);
+        my($pmtype,$cookie,$cmtype,undef,$pversion,$result,$error,undef,undef,undef,undef,$remotehost,$vendor) = unpack('nNnnnCCNNnna[64]a[64]', $data);
+        $remotehost =~ s/[\s\x00]*$//; $vendor =~ s/[\s\x00]*$//;
+
+        if ($opt_v) {
+                print "Start-Control-Connection-Reply contains:\n";
+                printf "  Length: %u\n", $len;
+                printf "  PPTP Message Type: %u\n", $pmtype;
+                printf "  Magic Cookie: %u (0x%x)\n", $cookie, $cookie;
+                printf "  Control Message Type: %u\n", $cmtype;
+                printf "  Protcol Version: %u (0x%x)\n", $pversion, $pversion;
+                printf "  Result Code: %u\n", $result;
+                printf "  Error Code: %u\n", $error;
+                printf "  Host Name: %s\n", $remotehost;
+                printf "  Vendor Name: %s\n", $vendor;
+        }
+
+        # sanity checks - these have fixed values in RFC2637
+        _return(sprintf('Wrong PPTP Message Type in Start-Control-Connection-Reply (got %u, expecting 1)', $pmtype), 'WARNING') unless ($pmtype == 1);
+        _return(sprintf('Incorrect Magic Cookie in Start-Control-Connection-Reply (got 0x%x, expecting 0x1a2b3c4d)', $cookie), 'CRITICAL') unless ($cookie == 0x1a2b3c4d);
+        _return(sprintf('Wrong Control Message Type in Start-Control-Connection-Reply (got %u, expecting 2)', $cmtype), 'WARNING') unless ($cmtype == 2);
+        _return(sprintf('Wrong Protocol Version in Start-Control-Connection-Reply (got 0x%x, expecting 0x0100)', $pversion), 'CRITICAL') unless ($pversion == 0x0100);
+
+        # Result Codes
+        if ($result == 2) {
+                # 2.16 General Error Codes
+                if ($error == 0) {
+                        _result('None: No general error (but result indicates there was)', 'WARNING');
+                } elsif ($error == 1) {
+                        _result('Not-Connected: No control connection exists yet for this PAC-PNS pair', 'CRITICAL');
+                } elsif ($error == 2) {
+                        _result('Bad-Format: Length is wrong or Magic Cookie value isincorrect', 'CRITICAL');
+                } elsif ($error == 3) {
+                        _result('Bad-Value: One of the field values was out of range or reserved field was non-zero', 'CRITICAL');
+                } elsif ($error == 4) {
+                        _result('No-Resource: Insufficient resources to handle this command now', 'CRITICAL');
+                } elsif ($error == 5) {
+                        _result('Bad-Call-ID: The Call ID is invalid in this context', 'CRITICAL');
+                } elsif ($error == 5) {
+                        _result('PAC-Error: A generic vendor-specific error occured in the PAC', 'CRITICAL');
+                } else {
+                        _result(sprintf('Remote host sent an unknown General Error Code (%u)', $error), 'CRITICAL');
+                }
+        } elsif ($result == 3) {
+                _return('Command channel already exists', 'CRITICAL');
+        } elsif ($result == 4) {
+                _return('Requester is not authorized to establish a command channel', 'WARNING');
+        } elsif ($result == 5) {
+                _result('The protocol version of the requester is not supported', 'WARNING');
+        } elsif ($result != 1) {
+                _result(sprintf('Remote host sent an unknown Result Code (%u)', $result), 'CRITICAL');
+        }
+
+        print "Start-Control-Connection-Reply passes sanity checks\n" if ($opt_v);
+
+        # 2.3 Stop-Control-Connection-Request
+        print "sending Stop-Control-Connection-Request\n" if ($opt_v);
+        $socket->send( pack('nnNnnCCn',
+                16, 1,
+                0x1a2b3c4d,
+                3, 0,
+                1, 0, 0,
+        ));
+
+        # 2.4 Stop-Control-Connection-Reply
+        print "waiting for Stop-Control-Connection-Reply\n" if ($opt_v);
+        $socket->recv($data, 16);
+        # ignore the reply, if any
+
+        print "closing socket\n" if ($opt_v);
+        $socket->close();
+
+        _return(sprintf('- %s (%s) %0.3f seconds', $remotehost, $vendor, tv_interval($start_time, [gettimeofday]) ), 'OK');
+
+}
+
