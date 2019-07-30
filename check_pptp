@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 # Simple implementation of RFC2637 to test PPTP
 # 20140506, Guy Halse, Rhodes University
 

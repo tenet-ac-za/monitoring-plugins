@@ -1,8 +1,9 @@
-#!/usr/bin/perl -T
+#!/usr/bin/env perl
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
 # @copyright Copyright (c) 2017, SAFIRE - South African Identity Federation
 # @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 #
+exec($^X,'-T',$0,@ARGV) unless ${^TAINT}; # enforce taint checking
 use strict;
 use warnings;
 use 5.10.0;
