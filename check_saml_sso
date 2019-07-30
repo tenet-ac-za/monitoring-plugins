@@ -196,7 +196,7 @@ if ($np->opts->redirectonly) {
 
 my ($authstatefield) = $res->decoded_content() =~ m/(\<\s*input\s+[^>]*AuthState[^>]+\>)/si;
 $np->plugin_exit(CRITICAL, 'Phase 2: AuthState field missing') unless defined $authstatefield;
-my ($authstate) = $authstatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+my ($authstate) = $authstatefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\/?>|\s+)/si;
 $np->plugin_exit(CRITICAL, 'Phase 2: AuthState missing') unless defined $authstate;
 
 print STDERR "Phase 2: AuthState " . $authstate . "\n" if $np->opts->verbose > 1;
