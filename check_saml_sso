@@ -9,10 +9,11 @@ use Monitoring::Plugin;
 use LWP::UserAgent;
 use HTTP::Request;
 use URI;
+use URI::Escape;
 use Time::HiRes qw(time);
 use Date::Parse;
 use POSIX;
-use vars qw ($hopCount);
+use vars qw ($hopCount $phase);
 our $VERSION = '0.3';
 
 # verify the certificate date
@@ -61,12 +62,12 @@ sub recurseRedirects($$$;$$)
         $req->content($postdata)    
     }
 
-    print STDERR "Phase 1: Request " . $req->as_string . "\n" if $np->opts->verbose;
+    print STDERR 'Phase ' . $phase . ': Request ' . $req->as_string . "\n" if $np->opts->verbose;
     my $res = $ua->simple_request($req);
 
     if ($res->is_error) {
         if ($res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT) {
-            $np->plugin_die("Phase 1 Timeout!") ;
+            $np->plugin_die("Phase $phase Timeout!") ;
         } elsif ($res->code == HTTP::Status::HTTP_INTERNAL_SERVER_ERROR) {
             # Special cases to match specific software (e.g. SimpleSAMLphp)
             if ($res->decoded_content =~ m/metadata.*expired/si) {
@@ -80,9 +81,9 @@ sub recurseRedirects($$$;$$)
 
     } elsif ($res->is_redirect) {
         my $new_uri = $res->header('location');
-        $np->plugin_die('Phase 1 redirect loop at '.$new_uri) if $res->request->uri->eq($new_uri);
+        $np->plugin_die('Phase '.$phase.' redirect loop at '.$new_uri) if $res->request->uri->eq($new_uri);
         $np->add_message(OK, "Redirected to " . cleanURI($new_uri));
-        print STDERR "Phase 1: Redirected to " . $new_uri . "\n" if $np->opts->verbose;
+        print STDERR 'Phase '.$phase.': Redirected to ' . $new_uri . "\n" if $np->opts->verbose;
         $ret = recurseRedirects($np, $ua, $new_uri, 'GET');
 
     } elsif ($res->is_success) {
@@ -91,7 +92,7 @@ sub recurseRedirects($$$;$$)
             my ($samlrequest) = $samlrequestfield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
             my ($method) = $res->decoded_content() =~ m/\<form\s+[^>]*method=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
             my ($action) = $res->decoded_content() =~ m/\<form\s+[^>]*action=["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
-            print STDERR "Phase 1.5: POST to " . $action . " using HTTP " . $method . "\n" if $np->opts->verbose;
+            print STDERR 'Phase '.$phase.".5: POST to " . $action . " using HTTP " . $method . "\n" if $np->opts->verbose;
             $np->add_message(OK, "POST to " . $action);
             $ret = recurseRedirects($np, $ua, $action, 'POST', {'SAMLRequest' => $samlrequest,});
         } else {
@@ -105,8 +106,15 @@ our $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ]  [-H <vhost>] [-I <address>] [-t <timeout>] [-u <url>]',
     'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'version' => $VERSION,
-    'blurb' => "A simple plugin to check SimpleSAMLphp SSO with loginuserpass.php or loginuserpassorg.php via the autotest module",
-    'extra' => "",
+    'blurb' => "A simple plugin to check SimpleSAMLphp SSO with loginuserpass.php or loginuserpassorg.php via the autotest module.",
+    'extra' => "
+  While written for SSP's autotest module, this plugin should be usable more
+  generically for any IdP that implements single-factor username/password
+  authentication via a web form and complies with the SAML2int Interoperable
+  SAML 2.0 WebSSO Deployment Profile. Since the plugin scrapes HTML to find
+  the necessary SAML fields in an HTTP-POST binding and for the actual login
+  form, the structure of these pages may be the limiting factor.
+    ",
 );
 
 $np->add_arg('spec' => 'url|u=s', 'help' => 'URL to fetch (default: /)', 'default' => '/',);
@@ -121,6 +129,7 @@ $np->add_arg('spec' => 'passfield=s', 'help' => 'Password field (default=passwor
 $np->add_arg('spec' => 'org|O=s', 'help' => 'Organisation/realm to add if using loginuserpassorg.php',);
 $np->add_arg('spec' => 'orgfield=s', 'help' => 'Organisation field (default=organization)', 'default' => 'organization');
 $np->add_arg('spec' => 'redirectonly|R', 'help' => 'Test redirects only (no login)', 'default' => 0);
+$np->add_arg('spec' => 'ok|k=s', 'help' => 'String to look for in final response from SP (default=OK)', 'default' => 'OK');
 $np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a certificate has to be valid (same format as check_http)');
 $np->add_arg('spec' => 'metadatacertinfo=s', 'help' => 'Internal option for passing metadata certificate expiry data');
 $np->getopts;
@@ -129,9 +138,11 @@ my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
 my $uri = new URI(($np->opts->ssl ? 'https' : 'http') . '://' . ($np->opts->address ? $np->opts->address : $np->opts->host) . ':' . $port . $np->opts->url, $np->opts->ssl ? 'https' : 'http');
 my $userfield = scalar $np->opts->userfield;
 my $passfield = scalar $np->opts->passfield;
+my $okstring = scalar $np->opts->ok;
 
 # perfdata
 $hopCount = -1;
+$phase = 0;
 our $startTime = time();
 
 # check metadata certificate expiry (hard-coded into config)
@@ -161,9 +172,13 @@ $ua->ssl_opts('SSL_verify_callback' => \&SSL_verify_callback);
 $ua->ssl_opts('SSL_ca_path' => '/etc/ssl/certs');
 
 # Phase 1: SP -> SSO
+$phase = 1;
+
+# Assumes HTTP-Redirect or HTTP-POST binding for SingleSignOnService
 my $res = recurseRedirects($np, $ua, $uri);
 
 # Phase 2: SSO Login
+$phase = 2;
 
 unless ($res->is_success) {
     if ($res->code == HTTP::Status::HTTP_UNAUTHORIZED) {
@@ -225,6 +240,7 @@ if (!$res3->is_success()) {
 print STDERR "Phase 2: HTTP response " . $res3->code . "\n" if $np->opts->verbose;
 
 # Phase 3: SSO Response
+$phase = 3;
 
 if ($res3->decoded_content() =~ m/\<\s*input\s+[^>]+($userfield|$passfield)/) {
     $np->add_message(CRITICAL, 'Looped back to username/password input (authentication failed?)');
@@ -232,6 +248,9 @@ if ($res3->decoded_content() =~ m/\<\s*input\s+[^>]+($userfield|$passfield)/) {
     $np->plugin_exit($code, $message);
 }
 
+my ($samlendpointfield) = $res3->decoded_content() =~ m/(\<\s*form\s+[^>]*action[^>]+\>)/si;
+my ($samlendpoint) = $samlendpointfield =~ m/\s+action\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
+print STDERR "Phase 3: SAML end-point " . $samlendpoint . "\n" if $np->opts->verbose > 1;
 my ($samlresponsefield) = $res3->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLResponse[^>]+\>)/si;
 my ($samlresponse) = $samlresponsefield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
 print STDERR "Phase 3: SAMLResponse " . $samlresponse . "\n" if $np->opts->verbose > 1;
@@ -242,12 +261,34 @@ if (not $samlresponse and not $relaystate) {
     $np->add_message(CRITICAL, 'Phase 3: No SAML response and/or relaystate');
     my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
     $np->plugin_exit($code, $message);
+} else {
+    $np->add_message(OK, 'Login succeeded for '.$np->opts->user);
 }
 
 # Phase 4: SSO -> SP
+$phase = 4;
 
+if ($okstring ne '') {
+    # Assumes an HTTP-POST binding for AssertionConsumerService
+    my $res4 = recurseRedirects($np, $ua, $samlendpoint,
+        'POST', 'SAMLResponse=' . uri_escape($samlresponse) . '&RelayState=' . uri_escape($relaystate)
+    );
+    if (!$res4->is_success()) {
+        $np->add_message(CRITICAL, 'SSO AssertionConsumerService HTTP ' . $res4->code . ' ' . $res4->message);
+        my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
+        $np->plugin_exit($code, $message);
+    }
+    print STDERR "Phase 4: HTTP response " . $res4->code . "\n" if $np->opts->verbose;
+
+    if ($res4->decoded_content() =~ m/$okstring/i) {
+        $np->add_message(OK, 'SP AssertionConsumerService found matching "' . $okstring . '"');
+    } else {
+        $np->add_message(WARNING, 'SP AssertionConsumerService did not match "' . $okstring . '"');
+    }
+}
 
 # All Done :-)
+$phase = 5;
 
 my ($code, $message) = $np->check_messages('join' => "\n", 'join_all' => "\n\n");
 if ($code == OK) {
