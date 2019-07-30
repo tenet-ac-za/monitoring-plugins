@@ -1,7 +1,9 @@
 #!/usr/bin/env perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2014, Rhodes University
+# @license https://opensource.org/licenses/BSD-3-Clause BSD-3-Clause
+#
 # Simple implementation of RFC2637 to test PPTP
-# 20140506, Guy Halse, Rhodes University
-
 use strict;
 use warnings;
 use POSIX;
