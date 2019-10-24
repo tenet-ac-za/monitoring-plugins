@@ -35,7 +35,7 @@ $np->add_arg('spec' => 'user|u=s', 'help' => 'Username to send (defaults to anon
 $np->getopts;
 
 alarm $np->opts->timeout;
-my $pid = open2(\*CHLD_OUT, \*CHLD_IN, '/usr/bin/radclient', '-t', $np->opts->timeout, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
+my $pid = open2(\*CHLD_OUT, \*CHLD_IN, '/usr/bin/radclient', '-x', '-t', $np->opts->timeout, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
 
 printf CHLD_IN "User-Name = \"%s\"\n", $np->opts->user;
 close(CHLD_IN);
