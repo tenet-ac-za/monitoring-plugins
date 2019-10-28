@@ -105,7 +105,7 @@ if (!$sth->rows) {
 }
 
 # prepare to get contacts
-my $sth_c = $dbh->prepare('SELECT contact_name,contact_email,contact_id,institution_id FROM edumanage_contact LEFT JOIN edumanage_institutioncontactpool ON (edumanage_contact.id=contact_id) WHERE contact_email!="" AND institution_id=?');
+my $sth_c = $dbh->prepare('SELECT contact_name,contact_email,contact_id,institution_id FROM edumanage_contact LEFT JOIN edumanage_institutioncontactpool ON (edumanage_contact.id=contact_id) WHERE contact_email!="" AND institution_id=? UNION DISTINCT SELECT contact_name,contact_email,contact_id,institution_id FROM edumanage_contact LEFT JOIN edumanage_institutiondetails_contact ON (edumanage_contact.id=contact_id) LEFT JOIN edumanage_institutiondetails ON (edumanage_institutiondetails.id=institutiondetails_id) WHERE contact_email!="" AND institution_id=? ORDER BY contact_email');
 
 # write a file header
 open(my $nagConf, '>', $c->{nagiosConfigDir} . '/' . $c->{nagiosConfigFile})
@@ -130,7 +130,7 @@ while (my $realm = $sth->fetchrow_hashref) {
     # Clean up MSCHAPV2 for newer eapol_test
     $realm->{'phase2'} = 'MSCHAPV2' if defined $realm->{'phase2'} and $realm->{'phase2'} =~ m/^ms-?chapv2/i;
 
-    $sth_c->execute($realm->{'instid_id'});
+    $sth_c->execute($realm->{'instid_id'}, $realm->{'instid_id'});
     while (my $contact = $sth_c->fetchrow_hashref) {
         # Sanity check the contact
         if ($contact->{'contact_email'} !~ m/^([^@]+)\@[a-z0-9\.]+$/i) {
