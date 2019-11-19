@@ -146,7 +146,8 @@ $np->add_arg('spec' => 'clientcert|C=s', 'help' => 'use client certificate to au
 $np->add_arg('spec' => 'clientpass=s', 'help' => 'set passphrase for client certificate');
 $np->add_arg('spec' => 'clientkey|K=s', 'help' => 'use client private key to authenticate', 'label' => 'file');
 $np->add_arg('spec' => 'issuer|i=s', 'help' => 'match peer certificate issuer');
-$np->add_arg('spec' => 'cn|n=s', 'help' => 'match the CN of the certificate');
+$np->add_arg('spec' => 'cn|n=s', 'help' => 'match the CN of the certificate subject');
+$np->add_arg('spec' => 'san|a', 'help' => 'matching the certificate subjectAlternativeName instead of subject is okay');
 $np->add_arg('spec' => 'warning|w=i', 'help' => 'minimum number of days a certificate has to be valid to issue a warning status', 'label' => 'days');
 $np->add_arg('spec' => 'critical|c=i', 'help' => 'minimum number of days a certificate has to be valid to issue a critical status', 'label' => 'days');
 $np->add_arg('spec' => 'noperfdata', 'help' => 'disable performance data output');
@@ -228,7 +229,13 @@ unless (@radsecservers) {
                         $np->add_message(CRITICAL, 'Peer certificate issuer "'.$cert->{issuer}->{commonName}.'" is not expected');
                     }
                     if ($np->opts->cn and $cert->{subject}->{commonName} ne $np->opts->cn) {
-                        $np->add_message(CRITICAL, 'Peer certificate CN "'.$cert->{subject}->{commonName}.'" is not expected');
+		        if (grep { $_->[0] eq 'DNS' and $_->[1] eq $np->opts->cn } @{$cert->{subjectAltNames}}) {
+		            if (not $np->opts->san) {
+                                $np->add_message(WARNING, 'Peer certificate matched "'.$np->opts->cn.'" as subjectAlternativeName (subject was "'.$cert->{subject}->{commonName}.'")');
+		            }
+			} else {
+                            $np->add_message(CRITICAL, 'Peer certificate subject "'.$cert->{subject}->{commonName}.'" is not expected');
+			}
                     }
 
                     if ($np->opts->verbose and $np->opts->verbose > 1) {
