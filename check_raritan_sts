@@ -1,0 +1,226 @@
+#!/usr/bin/env perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2020, SAFIRE - South African Identity Federation
+# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+#
+use strict;
+use warnings;
+use Monitoring::Plugin;
+use Net::SNMP;
+use experimental 'smartmatch';
+
+use constant {
+    INLETIDS => '.1.3.6.1.4.1.13742.6.3.3.3.1.2',
+    INLETLABELS => '.1.3.6.1.4.1.13742.6.3.3.3.1.3',
+    INLETSENSORCONFIGTABLE => '.1.3.6.1.4.1.13742.6.3.3.4.1.7',
+    INLETSENSORDATATABLE => '.1.3.6.1.4.1.13742.6.5.2.3.1.4',
+    OUTLETIDS => '.1.3.6.1.4.1.13742.6.3.5.3.1.2',
+    OUTLETLABELS => '.1.3.6.1.4.1.13742.6.3.5.3.1.3',
+    OUTLETSENSORCONFIGTABLE => '.1.3.6.1.4.1.13742.6.3.5.4.1.7',
+    OUTLETSENSORDATATABLE => '.1.3.6.1.4.1.13742.6.5.4.3.1.4',
+    TRANSFERIDS => '.1.3.6.1.4.1.13742.6.3.9.3.1.2',
+    TRANSFERLABELS => '.1.3.6.1.4.1.13742.6.3.9.3.1.3',
+    TRANSFERPREFERREDINLET => '.1.3.6.1.4.1.13742.6.3.9.3.1.4',
+    TRANSFERACTIVEINLET => '.1.3.6.1.4.1.13742.6.4.3.1.1.1', 
+    TRANSFERLASTREASON => '.1.3.6.1.4.1.13742.6.4.3.1.1.4',
+    TRANSFERSENSORDATATABLE => '.1.3.6.1.4.1.13742.6.5.7.3.1.3',
+    TRANSFERPHASETABLE => '.1.3.6.1.4.1.13742.6.5.7.3.1.6',
+};
+my %sensorStateEnumeration = (
+    -1 => [ UNKNOWN, 'unavailable' ],
+    2 => [ CRITICAL, 'belowLowerCritical' ],
+    3 => [ WARNING, 'belowLowerWarning' ],
+    4 => [ OK, 'normal' ],
+    5 => [ WARNING, 'aboveUpperWarning' ],
+    6 => [ CRITICAL, 'aboveUpperCritical' ],
+    8 => [ UNKNOWN, 'off' ],
+    12 => [ OK, 'ok' ],
+    14 => [ CRITICAL, 'fail' ],
+    17 => [ WARNING, 'standby' ],
+    20 => [ OK, 'inSync' ],
+    21 => [ WARNING, 'outOfSync' ],
+    22 => [ CRITICAL, 'i1OpenFault' ],
+    23 => [ CRITICAL, 'i1ShortFault' ],
+    24 => [ CRITICAL, 'i2OpenFault' ],
+    25 => [ CRITICAL, 'i2ShortFault' ],
+    26 => [ CRITICAL, 'fault' ],
+    27 => [ WARNING, 'warnings' ],
+    28 => [ CRITICAL, 'critical' ],
+    30 => [ WARNING, 'nonRedundant' ],
+);
+my @transferReasonEnumeration = qw(
+    unknown startup manualTransfer automaticReTransfer powerFailure
+    powerQuality overloadAlarm overheatAlarm internalFailure
+);
+
+my $np = Monitoring::Plugin->new(
+    'usage' => 'Usage: %s [ -v|--verbose ] -H <host> -C <snmp_community> [-2] [-t <timeout>]',
+    'version' => '0.1',
+    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'shortname' => 'STS',
+    'blurb' => "A plugin to check state of Raritan Static Transfer Switch (STS) via SNMP.",
+    'extra' => "
+",
+    'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
+);
+$np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
+$np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 161)', 'default' => 161);
+$np->add_arg('spec' => 'community|C=s', 'help' => 'SNMP community (defaults to "public")', 'default'=>'public');
+$np->add_arg('spec' => 'v2|2', 'help' => 'use SNMP v2c instead of 1');
+$np->add_arg('spec' => 'ignore|i=s@', 'help' => 'Transfer conditions to ignore (can specify multiple)');
+$np->getopts;
+
+# Establish an SNMP session - really should support SNMPv3
+my ($session, $error) =  Net::SNMP->session(
+    -hostname => $np->opts->host,
+    -version => $np->opts->v2 ? 2 : 1,
+    -community => $np->opts->community,
+    -port => $np->opts->port,
+    -timeout => $np->opts->timeout,
+);
+{
+    no warnings 'once';
+    $np->plugin_exit(CRITICAL, $error) unless defined($session);
+}
+
+# INLETS
+my @inletIndex = map { s/^.+\.(1\.[^\.]+)$/$1/; $_ } keys %{ $session->get_table(BaseOID => INLETIDS ) };
+my $inletLabels = $session->get_entries(Columns => [ INLETIDS, INLETLABELS ]);
+my $inletSensorData = $session->get_entries(Columns => [ INLETSENSORCONFIGTABLE, INLETSENSORDATATABLE ]);
+
+foreach my $i (@inletIndex) {
+    my $l = 'IN/' . $$inletLabels{INLETLABELS.'.'.$i} . '/';
+    _addsensorperf($np, $i, 'rmsCurrent', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'rmsVoltage', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'activePower', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'apparentPower', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'powerFactor', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+    # _addsensorperf($np, $i, 'activeEnergy', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'frequency', $l, $inletSensorData, INLETSENSORDATATABLE, INLETSENSORCONFIGTABLE);
+}
+
+# OUTLETS
+my @outletIndex = map { s/^.+\.(1\.[^\.]+)$/$1/; $_ } keys %{ $session->get_table(BaseOID => OUTLETIDS ) };
+my $outletLabels = $session->get_entries(Columns => [ OUTLETIDS, OUTLETLABELS ]);
+my $outletSensorData = $session->get_entries(Columns => [ OUTLETSENSORCONFIGTABLE, OUTLETSENSORDATATABLE ]);
+
+foreach my $i (@outletIndex) {
+    my $l = 'OUT/' . $$outletLabels{OUTLETLABELS.'.'.$i} . '/';
+    _addsensorperf($np, $i, 'rmsCurrent', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'rmsVoltage', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'activePower', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'apparentPower', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'powerFactor', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+    # _addsensorperf($np, $i, 'activeEnergy', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+    _addsensorperf($np, $i, 'frequency', $l, $outletSensorData, OUTLETSENSORDATATABLE, OUTLETSENSORCONFIGTABLE);
+}
+
+# TRANSFER
+my @transferIndex = map { s/^.+\.(1\.[^\.]+)$/$1/; $_ } keys %{ $session->get_table(BaseOID => TRANSFERIDS ) };
+my $transferLabels = $session->get_entries(Columns => [ TRANSFERIDS, TRANSFERLABELS ]);
+my $transferSensorData = $session->get_entries(Columns => [ TRANSFERSENSORDATATABLE, TRANSFERPHASETABLE, TRANSFERPREFERREDINLET, TRANSFERACTIVEINLET, TRANSFERLASTREASON ]);
+
+foreach my $i (@transferIndex) {
+    my $l = $$transferLabels{TRANSFERLABELS.'.'.$i} ? $$transferLabels{TRANSFERLABELS.'.'.$i} . '/' : '';
+
+    if (exists ($$transferSensorData{TRANSFERPREFERREDINLET.'.'.$i})) {
+        if ($$transferSensorData{TRANSFERPREFERREDINLET.'.'.$i} == $$transferSensorData{TRANSFERACTIVEINLET.'.'.$i}) {
+            $np->add_message(OK, $l.'preferredInletIsActive');
+        } else {
+            $np->add_message(WARNING, $l.'lastTransfer: ' . $transferReasonEnumeration[$$transferSensorData{TRANSFERLASTREASON.'.'.$i}]);
+        }
+    }
+    $np->add_perfdata(
+        label => $l.'activeInlet',
+        value => $$transferSensorData{TRANSFERACTIVEINLET.'.'.$i},
+        min => 1, max => 2
+    );
+
+    # operatingState
+    _addstatus($np, $i, 'operatingState', $l, $transferSensorData, TRANSFERSENSORDATATABLE);
+    # switchStatus
+    _addstatus($np, $i, 'switchStatus', $l, $transferSensorData, TRANSFERSENSORDATATABLE);
+    # overloadStatus
+    _addstatus($np, $i, 'overloadStatus', $l, $transferSensorData, TRANSFERSENSORDATATABLE);
+    # inletPhaseSyncAngle
+    _addstatus($np, $i, 'inletPhaseSyncAngle', $l, $transferSensorData, TRANSFERSENSORDATATABLE);
+    # inletPhaseSync
+    _addstatus($np, $i, 'inletPhaseSync', $l, $transferSensorData, TRANSFERSENSORDATATABLE);
+
+    if (exists($$transferSensorData{TRANSFERPHASETABLE.'.'.$i.'.38'})) {
+        $np->add_perfdata(
+            label => $l.'phaseAngle',
+            value => $$transferSensorData{TRANSFERPHASETABLE.'.'.$i.'.38'},
+            min => -360, max => 360, uom => 'deg'
+        );
+    }
+
+}
+
+my ($code, $message) = $np->check_messages(join => '; ', join_all => "\n");
+$np->plugin_exit( $code, $message );
+
+# ----
+
+sub _addstatus {
+    my ($np, $i, $part, $labelprefix, $data, $dataoid) = @_;
+    my %map = (
+        'operatingState' => [ 40 ],
+        'switchStatus' => [ 48 ],
+        'overloadStatus' => [ 33 ],
+        'inletPhaseSyncAngle' => [ 38 ],
+        'inletPhaseSync' => [ 39 ],
+    );
+    if ( $np->opts->verbose ) {
+        print STDERR "_addstatus(\$np, $i, $part, $labelprefix, \$data, $dataoid)\n";
+    }
+
+    my $state = $sensorStateEnumeration{$$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}}[0];
+    print STDERR 'state: '.$state  if $np->opts->verbose;
+    if ($part ~~ $np->opts->ignore) {
+        print STDERR ' (ignoring)' if $np->opts->verbose;
+        $state = OK;
+    }
+    print STDERR "\n" if $np->opts->verbose;
+
+    $np->add_message(
+        $state,
+        $labelprefix.$part.': ' . $sensorStateEnumeration{$$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}}[1]
+    );
+}
+
+sub _addsensorperf {
+    my ($np, $i, $part, $labelprefix, $data, $dataoid, $configoid) = @_;
+    my %map = (
+        # index, unit, precision, min, max
+        'rmsCurrent' => [1, 'A', 3, 0, 20],
+        'rmsVoltage' => [4, 'V', 1, 0, 250],
+        'activePower' => [5, 'W', 1, 0, 3800],
+        'apparentPower' => [6, 'VA', 1, 0, 3800],
+        'powerFactor' => [7, '', 2, 0, 1],
+        'activeEnergy' => [8, 'Wh', 1, 0],
+        'frequency' => [23, 'Hz', 1, 0, 60]
+    );
+    if ( $np->opts->verbose ) {
+        print STDERR "_addsensorperf(\$np, $i, $part, $labelprefix, \$data, $dataoid, $configoid)\n";
+    }
+    if (exists $$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}) {
+        my $value = sprintf(
+            '%0.'.$map{$part}[2].'f',
+            $$data{$dataoid.'.'.$i.'.'.$map{$part}[0]} / (10 ** $$data{$configoid.'.'.$i.'.'.$map{$part}[0]})
+        );
+        
+        if ( $np->opts->verbose ) {
+            print STDERR "raw value: " . $$data{$dataoid.'.'.$i.'.'.$map{$part}[0]} . "\n";
+            print STDERR "scale factor: ". $$data{$configoid.'.'.$i.'.'.$map{$part}[0]} . " = " . (10 ** $$data{$configoid.'.'.$i.'.'.$map{$part}[0]}) . "\n";
+            print STDERR "perfdata: " . $value . "\n";
+        }
+        $np->add_perfdata(
+            label => $labelprefix . $part,
+            value => $value,
+            uom => $map{$part}[1],
+            min => $map{$part}[3],
+            max => $map{$part}[4],
+        );
+    }
+}
