@@ -167,8 +167,8 @@ _addstatus($np, 1, 'activePower', '', $unitSensorData, UNITSENSORSTATETABLE);
 _addstatus($np, 1, 'i1smpsStatus', '', $unitSensorData, UNITSENSORSTATETABLE);
 _addstatus($np, 1, 'i2smpsStatus', '', $unitSensorData, UNITSENSORSTATETABLE);
 
-
-my ($code, $message) = $np->check_messages(join => '; ', join_all => "\n");
+# Collate output
+my ($code, $message) = $np->check_messages(join => ', ', join_all => "\n");
 $np->plugin_exit( $code, $message );
 
 # ----
