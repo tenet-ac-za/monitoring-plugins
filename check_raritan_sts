@@ -10,6 +10,9 @@ use Net::SNMP;
 use experimental 'smartmatch';
 
 use constant {
+    UNITSENSORDATATABLE => '.1.3.6.1.4.1.13742.6.5.1.3.1.4',
+    UNITSENSORCONFIGTABLE => '.1.3.6.1.4.1.13742.6.3.2.5.1.7',
+    UNITSENSORSTATETABLE => '.1.3.6.1.4.1.13742.6.5.1.3.1.3',
     INLETIDS => '.1.3.6.1.4.1.13742.6.3.3.3.1.2',
     INLETLABELS => '.1.3.6.1.4.1.13742.6.3.3.3.1.3',
     INLETSENSORCONFIGTABLE => '.1.3.6.1.4.1.13742.6.3.3.4.1.7',
@@ -157,6 +160,14 @@ foreach my $i (@transferIndex) {
 
 }
 
+# UNIT
+my $unitSensorData = $session->get_entries(Columns => [ UNITSENSORDATATABLE, UNITSENSORCONFIGTABLE, UNITSENSORSTATETABLE ]);
+_addsensorperf($np, 1, 'activePower', '', $unitSensorData, UNITSENSORDATATABLE, UNITSENSORCONFIGTABLE);
+_addstatus($np, 1, 'activePower', '', $unitSensorData, UNITSENSORSTATETABLE);
+_addstatus($np, 1, 'i1smpsStatus', '', $unitSensorData, UNITSENSORSTATETABLE);
+_addstatus($np, 1, 'i2smpsStatus', '', $unitSensorData, UNITSENSORSTATETABLE);
+
+
 my ($code, $message) = $np->check_messages(join => '; ', join_all => "\n");
 $np->plugin_exit( $code, $message );
 
@@ -165,16 +176,21 @@ $np->plugin_exit( $code, $message );
 sub _addstatus {
     my ($np, $i, $part, $labelprefix, $data, $dataoid) = @_;
     my %map = (
-        'operatingState' => [ 40 ],
-        'switchStatus' => [ 48 ],
+        'activePower' => [ 5 ],
+        'activeEnergy' => [ 8 ],
         'overloadStatus' => [ 33 ],
         'inletPhaseSyncAngle' => [ 38 ],
         'inletPhaseSync' => [ 39 ],
+        'operatingState' => [ 40 ],
+        'i1smpsStatus' => [ 46 ],
+        'i2smpsStatus' => [ 47 ],
+        'switchStatus' => [ 48 ],
     );
     if ( $np->opts->verbose ) {
         print STDERR "_addstatus(\$np, $i, $part, $labelprefix, \$data, $dataoid)\n";
     }
 
+    print STDERR 'status: ' . $$data{$dataoid.'.'.$i.'.'.$map{$part}[0]} . ' ('. $dataoid.'.'.$i.'.'.$map{$part}[0] . ")\n" if $np->opts->verbose;
     my $state = $sensorStateEnumeration{$$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}}[0];
     my $highlight = '';
     print STDERR 'state: '.$state  if $np->opts->verbose;
