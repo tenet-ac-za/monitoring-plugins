@@ -176,16 +176,18 @@ sub _addstatus {
     }
 
     my $state = $sensorStateEnumeration{$$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}}[0];
+    my $highlight = '';
     print STDERR 'state: '.$state  if $np->opts->verbose;
     if ($part ~~ $np->opts->ignore) {
         print STDERR ' (ignoring)' if $np->opts->verbose;
+        $highlight = '*';
         $state = OK;
     }
     print STDERR "\n" if $np->opts->verbose;
 
     $np->add_message(
         $state,
-        $labelprefix.$part.': ' . $sensorStateEnumeration{$$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}}[1]
+        $labelprefix.$part.': ' . $highlight . $sensorStateEnumeration{$$data{$dataoid.'.'.$i.'.'.$map{$part}[0]}}[1] . $highlight,
     );
 }
 
