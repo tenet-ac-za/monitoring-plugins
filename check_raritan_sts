@@ -128,8 +128,9 @@ foreach my $i (@transferIndex) {
 
     if (exists ($$transferSensorData{TRANSFERPREFERREDINLET.'.'.$i})) {
         if ($$transferSensorData{TRANSFERPREFERREDINLET.'.'.$i} == $$transferSensorData{TRANSFERACTIVEINLET.'.'.$i}) {
-            $np->add_message(OK, $l.'preferredInletIsActive');
+            $np->add_message(OK, $l.'activeInlet: ' . $$inletLabels{INLETLABELS.'.1.'.$$transferSensorData{TRANSFERACTIVEINLET.'.'.$i}} . ' (I' . $$transferSensorData{TRANSFERACTIVEINLET.'.'.$i} . '/preferred)');
         } else {
+            $np->add_message(WARNING, $l.'activeInlet: ' . $$inletLabels{INLETLABELS.'.1.'.$$transferSensorData{TRANSFERACTIVEINLET.'.'.$i}} . ' (' . $$transferSensorData{TRANSFERACTIVEINLET.'.'.$i} . ')');
             $np->add_message(WARNING, $l.'lastTransfer: ' . $transferReasonEnumeration[$$transferSensorData{TRANSFERLASTREASON.'.'.$i}]);
         }
     }
