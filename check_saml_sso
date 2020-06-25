@@ -65,7 +65,7 @@ sub recurseRedirects($$$;$$)
     print STDERR 'Phase ' . $phase . ': Request ' . $req->as_string . "\n" if $np->opts->verbose;
     my $res = $ua->simple_request($req);
 
-    if ($res->is_error) {
+    if ($res->is_error && !( $np->opts->auth401 && $res->code == HTTP::Status::HTTP_UNAUTHORIZED )) {
         if ($res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT) {
             $np->plugin_die("Phase $phase Timeout!") ;
         } elsif ($res->code == HTTP::Status::HTTP_INTERNAL_SERVER_ERROR) {
@@ -86,7 +86,7 @@ sub recurseRedirects($$$;$$)
         print STDERR 'Phase '.$phase.': Redirected to ' . $new_uri . "\n" if $np->opts->verbose;
         $ret = recurseRedirects($np, $ua, $new_uri, 'GET');
 
-    } elsif ($res->is_success) {
+    } elsif ($res->is_success || ( $np->opts->auth401 && $res->code == HTTP::Status::HTTP_UNAUTHORIZED )) {
         my ($samlrequestfield) = $res->decoded_content() =~ m/(\<\s*input\s+[^>]*SAMLRequest[^>]+\>)/si;
         if (defined $samlrequestfield and $samlrequestfield) {
             my ($samlrequest) = $samlrequestfield =~ m/\s+value\s*=\s*["']?([^"]+)["']?(?:\s*\\?>|\s+)/si;
@@ -132,6 +132,7 @@ $np->add_arg('spec' => 'redirectonly|R', 'help' => 'Test redirects only (no logi
 $np->add_arg('spec' => 'ok|k=s', 'help' => 'String to look for in final response from SP (default=OK)', 'default' => 'OK');
 $np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a certificate has to be valid (same format as check_http)');
 $np->add_arg('spec' => 'metadatacertinfo=s', 'help' => 'Internal option for passing metadata certificate expiry data');
+$np->add_arg('spec' => 'auth401:1', 'help' => 'Accept a 401 Authorisation Required response (unusual)', 'default' => 0);
 $np->getopts;
 
 my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
@@ -182,7 +183,7 @@ $phase = 2;
 
 unless ($res->is_success) {
     if ($res->code == HTTP::Status::HTTP_UNAUTHORIZED) {
-        $np->add_message(WARNING, 'SSO login page uses HTTP authentiction (this is unusual)');
+        $np->add_message($np->opts->auth401 ? OK : WARNING, 'SSO login page uses HTTP authentiction (this is unusual' . ($np->opts->auth401 ? ' but allowed for this entity' : '') . ')');
     } else {
         $np->add_message(CRITICAL, 'SSO Login Page HTTP ' . $res->code . ' ' . $res->message);
     }

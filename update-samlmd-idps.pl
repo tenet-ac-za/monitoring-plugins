@@ -39,6 +39,7 @@ my $c = Config::YAML->new(
     nagiosRestartCommand => '',
     metadataURL => '',
     disableContacts => [],
+    allow401Auth => [],
     tokenKey => 'changeme',
 );
 GetOptions($c,
@@ -237,6 +238,7 @@ foreach my $entity ($entities->get_nodelist) {
     printf $nagConf "  _PRIMARYSCOPE                  %s\n", $displayScope;
     printf $nagConf "  _INSTITUTION                   %s\n", $xp->findvalue("md:Organization/md:OrganizationName[\@xml:lang='en']", $entity);
     printf $nagConf "  _CERTINFO                      %s\n", join('|', @certs) if @certs;
+    printf $nagConf "  _ALLOWAUTH401                  %d\n", ($entityID ~~ $c->{'allow401Auth'}) ? 1 : 0;
     print  $nagConf "}\n\n";
 
     # Service dependencies stop us sending notification when radsecproxy itself is broken
@@ -342,6 +344,10 @@ B<update-samlmd-idps.pl> expects a YAML config file. All of the L<OPTIONS> above
 
 A list of email addresses that should never receive notifications.
 
+=item B<allow401Auth>
+
+A list of entityIDs that are allowed to generate a 401 Authorization Required response rather than 200 OK with a username field.
+
 =back
 
 =head2 SAMPLE CONFIG
@@ -356,6 +362,9 @@ A list of email addresses that should never receive notifications.
 
  disableContacts:
   - user@example.ac.za
+ 
+ allow401Auth:
+  - http://example.ac.za/shibboleth
 
 =head1 LICENSE
 
