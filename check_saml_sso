@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
-# @copyright Copyright (c) 2017, SAFIRE - South African Identity Federation
-# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+# @copyright Copyright (c) 2017, Tertiary Education and Research Network of South Africa
+# @license https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 #
 use strict;
 use warnings;
@@ -104,7 +104,7 @@ sub recurseRedirects($$$;$$)
 
 our $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ]  [-H <vhost>] [-I <address>] [-t <timeout>] [-u <url>]',
-    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'license' => 'MIT License <https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'version' => $VERSION,
     'blurb' => "A simple plugin to check SimpleSAMLphp SSO with loginuserpass.php or loginuserpassorg.php via the autotest module.",
     'extra' => "

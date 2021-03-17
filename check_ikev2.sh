@@ -1,6 +1,6 @@
 #!/bin/bash
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
-# @copyright Copyright (c) 2021, Tertiary Education and Research Network of South Africa NPC
+# @copyright Copyright (c) 2021, Tertiary Education and Research Network of South Africa
 # @license https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 
 source "${OMD_ROOT}/lib/monitoring-plugins/utils.sh"

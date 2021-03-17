@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
-# @copyright Copyright (c) 2020, SAFIRE - South African Identity Federation
-# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+# @copyright Copyright (c) 2020, Tertiary Education and Research Network of South Africa
+# @license https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 #
 use strict;
 use warnings;
@@ -59,12 +59,12 @@ my @transferReasonEnumeration = qw(
 my $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ] -H <host> -C <snmp_community> [-2] [-t <timeout>]',
     'version' => '0.1',
-    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'license' => 'MIT License <https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'shortname' => 'STS',
     'blurb' => "A plugin to check state of Raritan Static Transfer Switch (STS) via SNMP.",
     'extra' => "
 ",
-    'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
+    'url' => 'https://github.com/tenet-ac-za/monitoring-plugins',
 );
 $np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1);
 $np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 161)', 'default' => 161);

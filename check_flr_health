@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 # @author Guy Halse http://orcid.org/0000-0002-9388-8592
 # @copyright Copyright (c) 2017, Tertiary Education and Research Network of South Africa
-# @license https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+# @license https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
 #
 use strict;
 use warnings;
@@ -11,10 +11,10 @@ use IPC::Open2;
 my $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ] -H <host> -S <secret> [-p <port>] [-t <timeout>]',
     'version' => '0.1',
-    'license' => 'MIT License <https://github.com/safire-ac-za/monitoring-plugins/blob/master/LICENSE>',
+    'license' => 'MIT License <https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE>',
     'shortname' => 'FLRS',
     'blurb' => "A simple plugin to check an eduroam FLR server",
-    'url' => 'https://github.com/safire_ac_za/monitoring-plugins',
+    'url' => 'https://github.com/tenet-ac-za/monitoring-plugins',
     'extra' => "
 This plugin allows us to monitor radsecproxy running as an eduroam FLR server,
 where the server has been configured to respond using replymessage, something
