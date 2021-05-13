@@ -32,6 +32,7 @@ $np->add_arg('spec' => 'host|H=s', 'help' => 'Hostname to use', 'required' => 1)
 $np->add_arg('spec' => 'secret|S=s', 'help' => 'RADIUS secret', 'required' => 1);
 $np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 1812)', 'default' => 1812);
 $np->add_arg('spec' => 'user|u=s', 'help' => 'Username to send (defaults to anonymous@eduroam_flr_healthcheck)', 'default' => 'anonymous@eduroam_flr_healthcheck');
+$np->add_arg('spec' => 'regex|r=s', 'help' => 'Additional regex to match in the Reply-Message (the string "OK" is always checked)');
 $np->getopts;
 
 alarm $np->opts->timeout;
@@ -41,9 +42,17 @@ printf CHLD_IN "User-Name = \"%s\"\n", $np->opts->user;
 close(CHLD_IN);
 
 while (<CHLD_OUT>) {
-	next unless m/Reply-Message\s*=\s*["'](.*)["']$/;
-	my $response = $1;
-	$np->plugin_exit(($response =~ m/OK/ ? OK : WARNING), $response);
+    next unless m/Reply-Message\s*=\s*["'](.*)["']$/;
+    my $response = $1;
+    $np->add_message(($response =~ m/^\s*OK\b/ ? OK : WARNING), $response);
+    if ($np->opts->regex) {
+        my $regex = $np->opts->regex; $regex = qr/$regex/i;
+        if ($response !~ m/$regex/) {
+            $np->add_message(WARNING, "failed to match: " . $np->opts->regex);
+        }
+    }
+    my ($code, $message) = $np->check_messages();
+    $np->plugin_exit($code, $message);
 }
 waitpid( $pid, 0 );
 
