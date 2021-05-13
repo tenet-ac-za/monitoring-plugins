@@ -33,10 +33,14 @@ $np->add_arg('spec' => 'secret|S=s', 'help' => 'RADIUS secret', 'required' => 1)
 $np->add_arg('spec' => 'port|p=i', 'help' => 'Port to use (defaults to 1812)', 'default' => 1812);
 $np->add_arg('spec' => 'user|u=s', 'help' => 'Username to send (defaults to anonymous@eduroam_flr_healthcheck)', 'default' => 'anonymous@eduroam_flr_healthcheck');
 $np->add_arg('spec' => 'regex|r=s', 'help' => 'Additional regex to match in the Reply-Message (the string "OK" is always checked)');
+$np->add_arg('spec' => 'ipv4|4', 'help' => 'Force IPv4 instead of using OS default', 'default' => 0);
+$np->add_arg('spec' => 'ipv6|6', 'help' => 'Force IPv6 instead of using OS default', 'default' => 0);
 $np->getopts;
 
+my $af_inet = $np->opts->ipv6 ? '-6' : ($np->opts->ipv4 ? '-4' : '--');
+
 alarm $np->opts->timeout;
-my $pid = open2(\*CHLD_OUT, \*CHLD_IN, '/usr/bin/radclient', '-x', '-t', $np->opts->timeout, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
+my $pid = open2(\*CHLD_OUT, \*CHLD_IN, '/usr/bin/radclient', '-x', '-t', $np->opts->timeout, $af_inet, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
 
 printf CHLD_IN "User-Name = \"%s\"\n", $np->opts->user;
 close(CHLD_IN);
