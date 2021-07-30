@@ -156,6 +156,8 @@ $np->add_arg('spec' => 'dns-udp-timeout=i', 'help' => 'DNS resolver UDP timeout'
 $np->add_arg('spec' => 'ipv4|4', 'help' => 'Use IPv4 A records only', 'default' => 0);
 $np->add_arg('spec' => 'ipv6|6', 'help' => 'Use IPv6 AAAA records only', 'default' => 0);
 $np->add_arg('spec' => 'statusserver|u', 'help' => 'Send Status-Server RADIUS request', 'default' => 1);
+$np->add_arg('spec' => 'ssl-version|sv=s', 'help' => 'Set SSL version string (TLSv1|TLSv1_1|TLSv1_2 default SSLv23)', 'default' => 'SSLv23', 'label' => 'VERSION');
+$np->add_arg('spec' => 'ssl-cipher-list|sc=s', 'help' => 'Set SSL cipher list (OS default)', 'default' => '');
 $np->getopts;
 
 # check the nonaptr states
@@ -214,6 +216,8 @@ unless (@radsecservers) {
                     SSL_cert_file=>$np->opts->clientcert,
                     SSL_key_file=>$np->opts->clientkey?$np->opts->clientkey:$np->opts->clientcert,
                     SSL_passwd_cb=>\sub { return $np->opts->clientpass; },
+                    SSL_version=>$np->opts->{'ssl-version'},
+                    SSL_cipher_list=>$np->opts->{'ssl-cipher-list'},
                     Timeout=>$np->opts->timeout,
                     Domain=>($np->opts->ipv4 ? AF_INET : ( $np->opts->ipv6 ? AF_INET6 : AF_UNSPEC)),
                 );
@@ -277,7 +281,7 @@ unless (@radsecservers) {
                         }
                     }
 
-                    $np->add_message(OK, sprintf('%sSSL Connect OK (authority=%s, expires=%dd)', $prefix, $cert->{issuer}->{commonName}, $days));
+                    $np->add_message(OK, sprintf("%sSSL Connect OK (authority=%s, expires=%dd)\nSubject: %s\nExpires: %s\nSSL version: %s\nSSL cipher: %s", $prefix, $cert->{issuer}->{commonName}, $days, $cert->{subject}->{commonName}, scalar localtime($cert->{not_after}), $client->get_sslversion(), $client->get_cipher()));
                 }
             }
             $np->add_perfdata('label'=>'connect/'.$server->{host}, 'value'=>sprintf('%0.3f',time-$t2), 'min'=>0, 'max'=>$np->opts->timeout, 'uom'=>'s') unless $np->opts->noperfdata;
