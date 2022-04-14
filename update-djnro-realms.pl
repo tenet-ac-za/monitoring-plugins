@@ -98,7 +98,7 @@ if($djnroLastUpdated < $realmConfLastModified) {
 }
 
 # now get a list of realms to check
-$sth = $dbh->prepare('SELECT realm,realm_id,name AS inst_name,instid_id,instrealmmonid_id,edumanage_monlocalauthnparam.id AS monlocauthpar_id,eap_method,phase2,username,pass FROM edumanage_instrealm LEFT JOIN edumanage_instrealmmon ON (edumanage_instrealm.id=realm_id) LEFT JOIN edumanage_monlocalauthnparam ON (edumanage_instrealmmon.id=instrealmmonid_id) LEFT JOIN edumanage_name_i18n ON (object_id=instid_id) WHERE mon_type = "localauthn" AND content_type_id=(SELECT id FROM django_content_type WHERE app_label = "edumanage" AND model="institution") AND lang="en" AND edumanage_monlocalauthnparam.id IS NOT NULL ORDER BY realm,eap_method,phase2;');
+$sth = $dbh->prepare('SELECT realm,realm_id,name AS inst_name,instid_id,instrealmmonid_id,edumanage_monlocalauthnparam.id AS monlocauthpar_id,eap_method,phase2,username,pass,(CASE WHEN stage = 1 THEN "production" ELSE "test" END) AS stage FROM edumanage_instrealm LEFT JOIN edumanage_instrealmmon ON (edumanage_instrealm.id=realm_id) LEFT JOIN edumanage_monlocalauthnparam ON (edumanage_instrealmmon.id=instrealmmonid_id) LEFT JOIN edumanage_name_i18n ON (object_id=instid_id) LEFT JOIN edumanage_institution ON (edumanage_institution.id=instid_id) WHERE mon_type = "localauthn" AND content_type_id=(SELECT id FROM django_content_type WHERE app_label = "edumanage" AND model="institution") AND lang="en" AND edumanage_monlocalauthnparam.id IS NOT NULL ORDER BY realm,eap_method,phase2;');
 $sth->execute() or die('djnroRealms ' . $dbh->errstr);
 
 if (!$sth->rows) {
@@ -176,7 +176,12 @@ while (my $realm = $sth->fetchrow_hashref) {
     printf $nagConf "  service_description            realm-%s\n", $defangedRealm;
     print  $nagConf "  use                            djnro-generated-realm\n";
     printf $nagConf "  contact_groups                 djnro-cg-%s\n", $defangedRealm;
-    printf $nagConf "  display_name                   Realm: %s\n", $realm->{'realm'};
+    if (not exists($c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'disabled'}) and not $c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'disabled'} and $realm->{'stage'} ne 'test') {
+      printf $nagConf "  display_name                   Realm: %s\n", $realm->{'realm'};
+    } else {
+      printf $nagConf "  display_name                   Realm: %s [TEST]\n", $realm->{'realm'};
+      print  $nagConf "  notifications_enabled          0\n";
+    }
     printf $nagConf "  _EAP_ANONYMOUS                 %s\n", encode('utf-8', exists($c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'anonymous'}) ? $c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'anonymous'} : $realm->{'username'});
     printf $nagConf "  _EAP_METHOD                    %s\n", exists($c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'method'}) ? $c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'method'} : $realm->{'eap_method'};
     printf $nagConf "  _EAP_PASSWORD                  %s\n", encode('utf-8', exists($c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'pass'}) ? $c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'pass'} : $realm->{'pass'});
