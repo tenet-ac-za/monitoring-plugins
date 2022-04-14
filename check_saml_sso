@@ -43,14 +43,13 @@ sub cleanURI($)
     return $uri->as_string;
 }
 
-sub recurseRedirects($$$;$$);
 sub recurseRedirects($$$;$$)
 {
     my ($np, $ua, $uri, $method, $postdata) = @_;
     my ($ret);
 
-    if ($hopCount++ > 15) {
-        $np->plugin_die('Phase 1 too many redirects');
+    if ($hopCount++ > 20) { # match Chrome's limit
+        $np->plugin_die('Phase 1 too many redirects', CRITICAL);
     }
 
     my $req = new HTTP::Request;
@@ -67,7 +66,7 @@ sub recurseRedirects($$$;$$)
 
     if ($res->is_error && !( $np->opts->auth401 && $res->code == HTTP::Status::HTTP_UNAUTHORIZED )) {
         if ($res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT) {
-            $np->plugin_die("Phase $phase Timeout!") ;
+            $np->plugin_die("Phase $phase Timeout!", WARNING) ;
         } elsif ($res->code == HTTP::Status::HTTP_INTERNAL_SERVER_ERROR) {
             # Special cases to match specific software (e.g. SimpleSAMLphp)
             if ($res->decoded_content =~ m/metadata.*expired/si) {
@@ -81,7 +80,7 @@ sub recurseRedirects($$$;$$)
 
     } elsif ($res->is_redirect) {
         my $new_uri = $res->header('location');
-        $np->plugin_die('Phase '.$phase.' redirect loop at '.$new_uri) if $res->request->uri->eq($new_uri);
+        $np->plugin_die('Phase '.$phase.' redirect loop at '.$new_uri, WARNING) if $res->request->uri->eq($new_uri);
         $np->add_message(OK, "Redirected to " . cleanURI($new_uri));
         print STDERR 'Phase '.$phase.': Redirected to ' . $new_uri . "\n" if $np->opts->verbose;
         $ret = recurseRedirects($np, $ua, $new_uri, 'GET');
@@ -223,7 +222,7 @@ my $res3 = $ua->post($res->request->uri, 'Content' => {
     $np->opts->orgfield => $np->opts->org,
     'AuthState' => $authstate,
 });
-$np->plugin_die("Phase 2 Timeout!") if $res3->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
+$np->plugin_die("Phase 2 Timeout!", WARNING) if $res3->code == HTTP::Status::HTTP_REQUEST_TIMEOUT;
 foreach my $r ($res3->redirects) {
     next if $r->request->uri->eq($res->request->uri);
     $np->add_message(OK, "Redirected to " . cleanURI($r->request->uri));
