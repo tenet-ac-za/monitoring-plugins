@@ -10,7 +10,7 @@ Configuration is done in a YAML config file. By default it looks for this in `OM
 
 ```yaml
 ---
-metadataURL: https://metadata.safire.ac.za/safire-prod-idp.xml
+metadataURL: https://metadata.safire.ac.aq/safire-prod-idp.xml
 ```
 
 Full documentation of the config file can be obtained from perldoc(1)
@@ -24,8 +24,8 @@ The generated configuration uses Nagios' template inheritance mechanism to creat
 define service {
   name                           samlmd-generated-idp
   host_name                      testsp.example.ac.aq
-  use                            generic-pnp-service
-  check_command                  check_saml_sso!/Shibboleth.sso/Login?forceAuthn=true&entityID=$_SERVICEBIRKIFIEDENTITYID$&target=http://$HOSTNAME$/!-R -S -C 15,7 --metadatacertinfo '$_SERVICECERTINFO$'
+  use                            generic-service,srv-pnp
+  check_command                  check_saml_sso!/Shibboleth.sso/Login?forceAuthn=true&entityID=$_SERVICEENTITYID$&target=http://$HOSTNAME$/!-R -S -C 15,7 --metadatacertinfo '$_SERVICECERTINFO$' --auth401=$_SERVICEALLOWAUTH401$
   check_interval                 15
   first_notification_delay       45
   max_check_attempts             3
@@ -95,8 +95,8 @@ Similarly it is possible to add additional contacts:
 ```yaml
 ---
 additionalContacts:
-  - entityID: https://login.example.ac.za/idp/shibboleth
+  - entityID: https://login.example.ac.aq/idp/shibboleth
     givenName: Joshia
     sn: Carberry
-    mail: J.Carberry@example.ac.za
+    mail: J.Carberry@example.ac.aq
 ```

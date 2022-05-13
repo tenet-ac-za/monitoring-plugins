@@ -30,7 +30,7 @@ The generated configuration uses Nagios' template inheritance mechanism to creat
 define service {
   name                           djnro-generated-realm
   host_name                      eduroam NRO
-  use                            generic-pnp-service
+  use                            generic-service,srv-pnp
   check_command                  check_multi!idp_realm!-s EAP_METHOD="$_SERVICEEAP_METHOD$" -s EAP_PHASE2="$_SERVICEEAP_PHASE2$" -s EAP_ANONYMOUS="$_SERVICEEAP_ANONYMOUS$" -s EAP_USERNAME="$_SERVICEEAP_USERNAME$" -s EAP_PASSWORD='$_SERVICEEAP_PASSWORD$' -s REALM="$_SERVICEREALM$"
   check_interval                 15
   first_notification_delay       45
@@ -86,6 +86,28 @@ define servicedependency {
 }
 ```
 
+And the corresponding [check_multi](https://github.com/flackem/check_multi) config referenced as `idp_realm` is:
+
+```
+attribute [ name ] = EAP
+attribute [ collapse ] = 0
+
+command [ flr-1_$REALM$ ] = $USER2$/rad_eap_test -H antarctica-flr-1.eduroam.ac.aq -P 1812 -S $USER101$ -A "$EAP_ANONYMOUS$" -u "$EAP_USERNAME$" -p '$EAP_PASSWORD$' -s eduroam -e "$EAP_METHOD$" -2 "$EAP_PHASE2$" -m WPA-EAP -i "0/0 https://monitor.eduroam.ac.aq/" -O "eduroam.ac.aq" -I 172.20.1.2 -M -22:44:66:00:41:51 -C -V -t 8
+command [ flr-2_$REALM$ ] = $USER2$/rad_eap_test -H antarctica-flr-2.eduroam.ac.aq -P 1812 -S $USER101$ -A "$EAP_ANONYMOUS$" -u "$EAP_USERNAME$" -p '$EAP_PASSWORD$' -s eduroam -e "$EAP_METHOD$" -2 "$EAP_PHASE2$" -m WPA-EAP -i "0/0 https://monitor.eduroam.ac.aq/" -O "eduroam.ac.aq" -I 172.25.9.3 -M 22:44:66:00:41:51 -C -V -t 8
+
+info [ flr-1_$REALM$::post_warning ] = [check monitoring account's username, password, and expiry date]
+info [ flr-2_$REALM$::post_warning ] = [check monitoring account's username, password, and expiry date]
+info [ flr-1_$REALM$::post_critical ] = [check your RADIUS server(s), firewall config, and/or the RADIUS secret you have for antarctica-flr-1]
+info [ flr-2_$REALM$::post_critical ] = [check your RADIUS server(s), firewall config, and/or the RADIUS secret you have for antarctica-flr-2]
+
+command [ Certificate ] = $USER2$/rad_eap_test -H antarctica-flr-1.eduroam.ac.aq -P 1812 -S $USER101$ -A "$EAP_ANONYMOUS$" -u "$EAP_USERNAME$" -p '$EAP_PASSWORD$' -s eduroam -e "$EAP_METHOD$" -2 "$EAP_PHASE2$" -m WPA-EAP -i "0/0 https://monitor.eduroam.ac.aq/" -O "eduroam.ac.aq" -I 172.20.1.2 -M 22:44:66:00:41:51 -b -X 10 -t 8
+
+command [ Dynamic ] = $USER2$/check_eduroam_radsec -H $REALM$ --dns-udp-timeout 7 -D -N OK -R _radsec._tcp.eduroam.ac.aq -T antarctica-flr-1.eduroam.ac.aq -T antarctica-flr-2.eduroam.ac.aq -p 2083 -S
+
+info [ Dynamic::post_critical ] = [see https://eduroam.ac.aq/faq/configuration/#naptr for the correct format of NAPTR records]
+info [ Dynamic::post_unknown ] = [There may be a problem with your DNS server]
+```
+
 ## Overriding DjNRO information
 
 It is sometimes necessary to override the incoming credentials from DjNRO, for example when an IdP mandates a specific outer identity. This can be done in the config file as follows:
@@ -93,12 +115,12 @@ It is sometimes necessary to override the incoming credentials from DjNRO, for e
 ```yaml
 ---
 credentialOverride:
-  example.ac.za:
-    anonymous: anonymous@example.ac.za
+  eduroam.ac.aq:
+    anonymous: anonymous@eduroam.ac.aq
     method: PEAP
     pass: password
     phase2: MSCHAPV2
-    username: username@example.ac.za
+    username: username@eduroam.ac.aq
 ```
 
 # Disabling contacts
