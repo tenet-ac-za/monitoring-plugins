@@ -42,17 +42,19 @@ sub findDynamicRadsec($)
         }
     }
 
+    my $service_name = $np->opts->rfc7585 ? 'aaa+auth:radius.tls.tcp' : 'x-eduroam:radius.tls';
+
     foreach my $rr (grep { $_->type eq 'NAPTR' } $naptr->answer) {
-        next unless lc($rr->service) eq 'x-eduroam:radius.tls';
+        next unless lc($rr->service) eq $service_name;
         $rr->print if $np->opts->verbose;
-        $np->add_message(CRITICAL, 'x-eduroam:radius.tls NAPTR record must have the "S" flag') unless uc($rr->flags) eq 'S';
-        $np->add_message(CRITICAL, 'x-eduroam:radius.tls NAPTR record must not have a regexp set') unless uc($rr->regexp) eq '';
+        $np->add_message(CRITICAL, $service_name . ' NAPTR record must have the "S" flag') unless uc($rr->flags) eq 'S';
+        $np->add_message(CRITICAL, $service_name . ' NAPTR record must not have a regexp set') unless uc($rr->regexp) eq '';
         $np->add_message(WARNING, 'NAPTR replacement '.$rr->replacement.' is not expected') if ($np->opts->replacement and not grep { lc($_) eq lc($rr->replacement)} @{$np->opts->replacement});
         push @srvs, $rr->replacement;
     }
-    $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, 'No x-eduroam:radius.tls NAPTR records found') unless @srvs;
+    $np->plugin_exit($Monitoring::Plugin::ERRORS{$np->opts->nonaptr}, "No $service_name NAPTR records found") unless @srvs;
     $np->add_perfdata('label'=>'naptrs', 'value'=>($#srvs+1), 'min'=>0) unless $np->opts->noperfdata;
-    $np->add_message(CRITICAL, 'More than one x-eduroam:radius.tls NAPTR record found.') if @srvs and $#srvs > 1;
+    $np->add_message(CRITICAL, "More than one $service_name NAPTR record found.") if @srvs and $#srvs > 1;
 
     # Find the corresponding SRV records
     my @mergedservers;
@@ -136,6 +138,7 @@ transport layer can be established.
 $np->add_arg('spec' => 'host|hostname|H=s', 'help' => 'Hostname to use', 'required' => 1);
 $np->add_arg('spec' => 'dynamic|D', 'help' => 'Use dynamic discovery via NAPTR/SRV');
 $np->add_arg('spec' => 'nonaptr|N=s', 'help' => 'Status to return when a NAPTR record is not found during dynamic discovery (defaults to WARNING).', 'default' => 'WARNING', 'label'=>'['.join(',', keys %Monitoring::Plugin::ERRORS).']');
+$np->add_arg('spec' => 'rfc7585|o', 'help' => 'Find aaa+auth:radius.tls.tcp rather than x-eduroam:radius.tls for NAPTR records when doing dynamic discovery.');
 $np->add_arg('spec' => 'target|T=s@', 'help' => 'Target host to expect in SRV records for dynamic discovery (can be specified multiple times)');
 $np->add_arg('spec' => 'replacement|R=s@', 'help' => 'Replacement to expect in NAPTR records for dynamic discovery (can be specified multiple times)');
 $np->add_arg('spec' => 'port|p=i', 'help' => 'RadSec port we should use or expect in SRV records (default 2083).', 'default' => 2083);
