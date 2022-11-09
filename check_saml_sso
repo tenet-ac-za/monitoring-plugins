@@ -27,9 +27,9 @@ sub SSL_verify_callback
         my $daysLeft = int((str2time($notAfter) - $main::startTime)/86400);
         my $subject =  Net::SSLeay::X509_NAME_get_text_by_NID(Net::SSLeay::X509_get_subject_name($cert), &Net::SSLeay::NID_commonName);
         if ($critical && $critical >= $daysLeft) {
-            $main::np->add_message(CRITICAL,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+            $main::np->add_message(CRITICAL,  sprintf("SSL certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         } elsif ($warning && $warning >= $daysLeft) {
-            $main::np->add_message(WARNING,  sprintf("Certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+            $main::np->add_message(WARNING,  sprintf("SSL certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         }
     }
     return 1;
@@ -130,6 +130,7 @@ $np->add_arg('spec' => 'orgfield=s', 'help' => 'Organisation field (default=orga
 $np->add_arg('spec' => 'redirectonly|R', 'help' => 'Test redirects only (no login)', 'default' => 0);
 $np->add_arg('spec' => 'ok|k=s', 'help' => 'String to look for in final response from SP (default=OK)', 'default' => 'OK');
 $np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a certificate has to be valid (same format as check_http)');
+$np->add_arg('spec' => 'renewinfo=s', 'help' => 'Additional message to include in certificate warnings', 'default' => '');
 $np->add_arg('spec' => 'metadatacertinfo=s', 'help' => 'Internal option for passing metadata certificate expiry data');
 $np->add_arg('spec' => 'auth401:1', 'help' => 'Accept a 401 Authorisation Required response (unusual)', 'default' => 0);
 $np->getopts;
@@ -152,10 +153,14 @@ if ($np->opts->certificate && $np->opts->metadatacertinfo) {
     foreach my $cert (split /\|/, $np->opts->metadatacertinfo) {
         my ($notAfter, $subject) = split /\//, $cert;
         my $daysLeft = int(($notAfter - $startTime)/86400);
-        if ($critical && $critical >= $daysLeft) {
-            $np->add_message(CRITICAL,  sprintf("Metadata certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+        if ($daysLeft <= 0) {
+            $np->add_message(CRITICAL,  sprintf("SAML certificate '%s' from metadata has EXPIRED. Users may not be able to authenticate. (%s)", $subject, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+        } elsif ($critical && $critical >= $daysLeft) {
+            $np->add_message(CRITICAL,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+	    $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
         } elsif ($warning && $warning >= $daysLeft) {
-            $np->add_message(WARNING,  sprintf("Metadata certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+            $np->add_message(WARNING,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+	    $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
         }
     }
 }
