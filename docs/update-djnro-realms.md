@@ -123,6 +123,35 @@ credentialOverride:
     username: username@eduroam.ac.aq
 ```
 
+## Additional service
+
+It may be desirable to separate service-affecting problems from best-practice type problems. For example, it is a good idea to check whether a certificate is going to expire, but until it expires it is not service affecting. Thus the config option `generateExtraService` will generate a second set of services, service escalations, and service dependencies for each realm.
+
+These use the same inheritance described above, but have their config sections suffixed `-extra`. So a minimal set of additional templates would be:
+
+```
+define service {
+  name                           djnro-generated-realm-extra
+  use                            djnro-generated-realm
+  check_command                  check_multi!idp_realm_extra!-s EAP_METHOD="$_SERVICEEAP_METHOD$" -s EAP_PHASE2="$_SERVICEEAP_PHASE2$" -s EAP_ANONYMOUS="$_SERVICEEAP_ANONYMOUS$" -s EAP_USERNAME="$_SERVICEEAP_USERNAME$" -s EAP_PASSWORD='$_SERVICEEAP_PASSWORD$' -s REALM="$_SERVICEREALM$"
+  register                       0
+}
+
+define serviceescalation {
+  name                           djnro-generated-serviceescalation-extra
+  use                            djnro-generated-serviceescalation
+  register                       0
+}
+
+define servicedependency {
+  name                           djnro-generated-servicedependency-extra
+  use                            djnro-generated-servicedependency
+  hostgroup_name                 eduroam NRO
+  dependent_host_name            eduroam NRO
+  register                       0
+}
+```
+
 # Disabling contacts
 
 Some contacts may not wish to receive notifications, and so it is possible to disable those contacts in the config file:
