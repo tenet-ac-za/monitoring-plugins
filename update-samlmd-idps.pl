@@ -22,7 +22,7 @@ use Encode;
 sub emailToken($$)
 {
     my ($email, $key) = @_;
-    my $cipher = Crypt::CBC->new(-key => $key, -cipher => 'DES');
+    my $cipher = Crypt::CBC->new(-key => $key, -cipher => 'DES', -pbkdf=>'pbkdf2');
     my $ciphertext = $cipher->encrypt($email);
     return MIME::Base64::URLSafe::encode($ciphertext);
 }
