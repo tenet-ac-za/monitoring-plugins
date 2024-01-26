@@ -5,14 +5,14 @@
 #
 use strict;
 use warnings;
-use Monitoring::Plugin;
-use LWP::UserAgent;
+use Date::Parse;
 use HTTP::Request;
+use LWP::UserAgent;
+use Monitoring::Plugin;
+use POSIX;
+use Time::HiRes qw(time);
 use URI;
 use URI::Escape;
-use Time::HiRes qw(time);
-use Date::Parse;
-use POSIX;
 use vars qw ($hopCount $phase);
 our $VERSION = '0.3';
 
@@ -43,6 +43,8 @@ sub cleanURI($)
     return $uri->as_string;
 }
 
+# prototype because calls itself
+sub recurseRedirects($$$;$$);
 sub recurseRedirects($$$;$$)
 {
     my ($np, $ua, $uri, $method, $postdata) = @_;
@@ -63,6 +65,12 @@ sub recurseRedirects($$$;$$)
 
     print STDERR 'Phase ' . $phase . ': Request ' . $req->as_string . "\n" if $np->opts->verbose;
     my $res = $ua->simple_request($req);
+
+    if ($np->opts->skew && $res->header('Date')) {
+        my $skew_check = $np->check_threshold('check' => $res->current_age(), 'warning' => $np->opts->skew);
+        print STDERR 'Phase ' . $phase . ': Clock skew for ' . $req->uri->host . ': date=' . $res->header('Date') . ', age=' . $res->current_age() . "\n" if $np->opts->verbose;
+        $np->add_message($skew_check, 'Clock skew for ' . $req->uri->host . ' may be out of tolerance (current age ' . $res->current_age() . ' secs)') if $skew_check != OK;
+    }
 
     if ($res->is_error && !( $np->opts->auth401 && $res->code == HTTP::Status::HTTP_UNAUTHORIZED )) {
         if ($res->code == HTTP::Status::HTTP_REQUEST_TIMEOUT) {
@@ -133,6 +141,7 @@ $np->add_arg('spec' => 'certificate|C=s', 'help' => 'Minimum number of days a ce
 $np->add_arg('spec' => 'renewinfo=s', 'help' => 'Additional message to include in certificate warnings', 'default' => '');
 $np->add_arg('spec' => 'metadatacertinfo=s', 'help' => 'Internal option for passing metadata certificate expiry data');
 $np->add_arg('spec' => 'auth401:1', 'help' => 'Accept a 401 Authorisation Required response (unusual)', 'default' => 0);
+$np->add_arg('spec' => 'skew|s=s', 'help' => 'Attempt to check clock skew is within thresholds using webserver Date: header (default 300 [5 mins])', 'default' => '300');
 $np->getopts;
 
 my $port = $np->opts->port ? $np->opts->port : ( $np->opts->ssl ? 443 : 80);
@@ -157,10 +166,10 @@ if ($np->opts->certificate && $np->opts->metadatacertinfo) {
             $np->add_message(CRITICAL,  sprintf("SAML certificate '%s' from metadata has EXPIRED. Users may not be able to authenticate. (%s)", $subject, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
         } elsif ($critical && $critical >= $daysLeft) {
             $np->add_message(CRITICAL,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
-	    $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
+        $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
         } elsif ($warning && $warning >= $daysLeft) {
             $np->add_message(WARNING,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
-	    $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
+        $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
         }
     }
 }
@@ -211,6 +220,7 @@ if ($np->opts->redirectonly) {
     }
     $np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 3);
     $np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
+    $np->add_perfdata('label' => 'skew', 'value' => $res->current_age(), 'uom' => 's', 'min' => 0);
     $np->plugin_exit($code, ' ' . $message);
 }
 
@@ -301,4 +311,5 @@ if ($code == OK) {
 }
 $np->add_perfdata('label' => 'hops', 'value' => $hopCount, 'min' => 1, 'max' => $ua->max_redirect * 5);
 $np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
+$np->add_perfdata('label' => 'skew', 'value' => $res->current_age(), 'uom' => 's', 'min' => 0);
 $np->plugin_exit($code, ' '.$message);
