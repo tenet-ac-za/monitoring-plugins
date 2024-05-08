@@ -31,7 +31,7 @@ define service {
   name                           djnro-generated-realm
   host_name                      eduroam NRO
   use                            generic-service,srv-pnp
-  check_command                  check_multi!idp_realm!-s EAP_METHOD="$_SERVICEEAP_METHOD$" -s EAP_PHASE2="$_SERVICEEAP_PHASE2$" -s EAP_ANONYMOUS="$_SERVICEEAP_ANONYMOUS$" -s EAP_USERNAME="$_SERVICEEAP_USERNAME$" -s EAP_PASSWORD='$_SERVICEEAP_PASSWORD$' -s REALM="$_SERVICEREALM$"
+  check_command                  check_multi!idp_realm!-s EAP_METHOD="$_SERVICEEAP_METHOD$" -s EAP_PHASE2="$_SERVICEEAP_PHASE2$" -s EAP_ANONYMOUS="$_SERVICEEAP_ANONYMOUS$" -s EAP_USERNAME="$_SERVICEEAP_USERNAME$" -s EAP_PASSWORD='$_SERVICEEAP_PASSWORD$' -s REALM="$_SERVICEREALM$" -s FLAGS="$_SERVICEFLAGS"
   check_interval                 15
   first_notification_delay       45
   max_check_attempts             3
@@ -102,7 +102,13 @@ info [ flr-2_$REALM$::post_critical ] = [check your RADIUS server(s), firewall c
 
 command [ Certificate ] = $USER2$/rad_eap_test -H antarctica-flr-1.eduroam.ac.aq -P 1812 -S $USER101$ -A "$EAP_ANONYMOUS$" -u "$EAP_USERNAME$" -p '$EAP_PASSWORD$' -s eduroam -e "$EAP_METHOD$" -2 "$EAP_PHASE2$" -m WPA-EAP -i "0/0 https://monitor.eduroam.ac.aq/" -O "eduroam.ac.aq" -I 172.20.1.2 -M 22:44:66:00:41:51 -b -X 10 -t 8
 
-command [ Dynamic ] = $USER2$/check_eduroam_radsec -H $REALM$ --dns-udp-timeout 7 -D -N OK -R _radsec._tcp.eduroam.ac.aq -T antarctica-flr-1.eduroam.ac.aq -T antarctica-flr-2.eduroam.ac.aq -p 2083 -S
+eval [ DYNAMIC_CHECK ] = if ($FLAGS$ & 1) { \
+    return 'check_dummy 0 "Dynamic checks disabled for $REALM$"'; \
+} else { \
+    return '$USER2$/check_eduroam_radsec -H $REALM$ --dns-udp-timeout 7 -D -N OK -R _radsec._tcp.eduroam.ac.aq -T antarctica-flr-1.eduroam.ac.aq -T antarctica-flr-2.eduroam.ac.aq -p 2083 -S' ; \
+}
+
+command [ Dynamic ] = $DYNAMIC_CHECK$
 
 info [ Dynamic::post_critical ] = [see https://eduroam.ac.aq/faq/configuration/#naptr for the correct format of NAPTR records]
 info [ Dynamic::post_unknown ] = [There may be a problem with your DNS server]
@@ -121,7 +127,10 @@ credentialOverride:
     pass: password
     phase2: MSCHAPV2
     username: username@eduroam.ac.aq
+    flags: 2
 ```
+
+The `flags` entry (passed to check_multi as $FLAGS$ above) exists to allow you to manipulate tests in a user-defined way. In the above example, it's used to turn off dynamic realm checks using a bitwise AND. It defaults to zero (0) to make this possible.
 
 ## Additional service
 
@@ -133,7 +142,7 @@ These use the same inheritance described above, but have their config sections s
 define service {
   name                           djnro-generated-realm-extra
   use                            djnro-generated-realm
-  check_command                  check_multi!idp_realm_extra!-s EAP_METHOD="$_SERVICEEAP_METHOD$" -s EAP_PHASE2="$_SERVICEEAP_PHASE2$" -s EAP_ANONYMOUS="$_SERVICEEAP_ANONYMOUS$" -s EAP_USERNAME="$_SERVICEEAP_USERNAME$" -s EAP_PASSWORD='$_SERVICEEAP_PASSWORD$' -s REALM="$_SERVICEREALM$"
+  check_command                  check_multi!idp_realm_extra!-s EAP_METHOD="$_SERVICEEAP_METHOD$" -s EAP_PHASE2="$_SERVICEEAP_PHASE2$" -s EAP_ANONYMOUS="$_SERVICEEAP_ANONYMOUS$" -s EAP_USERNAME="$_SERVICEEAP_USERNAME$" -s EAP_PASSWORD='$_SERVICEEAP_PASSWORD$' -s REALM="$_SERVICEREALM$" -s FLAGS="$_SERVICEFLAGS"
   register                       0
 }
 

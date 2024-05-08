@@ -199,6 +199,7 @@ while (my $realm = $sth->fetchrow_hashref) {
         printf $nagConf "  _EDITURI                       monlocauthpar/edit/%d/%d\n", $realm->{'instrealmmonid_id'}, $realm->{'monlocauthpar_id'};
         printf $nagConf "  _INSTITUTION                   %s\n", encode('utf-8', $realm->{'inst_name'});
         printf $nagConf "  _REALM                         %s\n", lc($realm->{'realm'});
+        printf $nagConf "  _FLAGS                         %s\n", encode('utf-8', exists($c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'flags'}) ? $c->{'credentialOverride'}->{lc($realm->{'realm'})}->{'flags'} : '0');
         print  $nagConf "}\n\n";
  
         # Service dependencies stop us sending notification when radsecproxy itself is broken
@@ -338,7 +339,7 @@ A map of credential options that override the DjNRO settings for a realm.
   - eduroam@example.ac.za
 
  credentialOverride:
-  example.ac.za: { method: PEAP, phase2: MSCHAPV2, anonymous: anonymous@example.ac.za, username: username@example.ac.za, pass: password }
+  example.ac.za: { method: PEAP, phase2: MSCHAPV2, anonymous: anonymous@example.ac.za, username: username@example.ac.za, pass: password, flags: 2 }
 
 =head1 LICENSE
 
