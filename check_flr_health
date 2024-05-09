@@ -6,7 +6,7 @@
 use strict;
 use warnings;
 use Monitoring::Plugin;
-use IPC::Open2;
+use IPC::Open3;
 
 my $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ] -H <host> -S <secret> [-p <port>] [-t <timeout>]',
@@ -40,9 +40,10 @@ $np->getopts;
 my $af_inet = $np->opts->ipv6 ? '-6' : ($np->opts->ipv4 ? '-4' : '--');
 
 alarm $np->opts->timeout;
-my $pid = open2(\*CHLD_OUT, \*CHLD_IN, '/usr/bin/radclient', '-x', '-t', $np->opts->timeout, $af_inet, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
+my $pid = open3(\*CHLD_IN, \*CHLD_OUT, undef, '/usr/bin/radclient', '-x', '-t', $np->opts->timeout, $af_inet, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
 
 printf CHLD_IN "User-Name = \"%s\"\n", $np->opts->user;
+printf CHLD_IN "Message-Authenticator = 0x00\n";
 close(CHLD_IN);
 
 while (<CHLD_OUT>) {
