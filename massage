@@ -1,0 +1,102 @@
+#!/usr/bin/perl
+# @author Guy Halse http://orcid.org/0000-0002-9388-8592
+# @copyright Copyright (c) 2025, Tertiary Education and Research Network of South Africa
+# @license https://github.com/tenet-ac-za/monitoring-plugins/blob/master/LICENSE MIT License
+#
+use strict;
+use warnings;
+use Getopt::Long;
+use File::Basename;
+use IPC::Open3;
+
+my %ERRORS=('OK'=>0,'WARNING'=>1,'CRITICAL'=>2,'UNKNOWN'=>3,'DEPENDENT'=>4);
+my %SHORTTOLONG = map { uc(substr($_, 0, 1)) => $_ } keys %ERRORS;
+
+$SIG{ALRM} = sub { print "TIMEOUT while executing wrapped plugin\n"; exit $ERRORS{'UNKNOWN'} };
+
+sub print_usage() {
+    printf "Usage: %s [-t timeout] [-s] [-m 'regex:orig:new'] [--] <definition of wrapped plugin>\n", basename($0);
+}
+sub print_help() {
+    print_usage();
+    print "
+Massages the return code (and potentially the output) of a plugin to
+replace one return code with another when a specific condition is matched
+in the wrapped plugin's output. (Think of it as a conditional version
+of the negate plugin.)
+
+Options:
+ -m, --manipulation=regex:original_statis:new_status
+    Colon-separated string containing a regular expression to match in
+    the wrapped plugins output, an original status to match, and a new
+    status code to replace it with. Status codes can be written out in
+    full or abbreviated to the first letter of the status. For example:
+
+      hello world:CRITICAL:WARNING
+
+    will match the regular expression m/hello world/ (case sensitive)
+    and if the resulting status code was CRITICAL, it will be replaced
+    by a WARNING.
+ -t, --timeout=INTEGER
+    Seconds before plugin times out (default: 11) Keep timeout longer
+    than the wrapped plugin timeout to retain CRITICAL status.
+
+-s, --substitute
+    Substitute output text as well. Will only substitute text in CAPITALS
+
+Normally the wrapped plugin definition is enough to separate the options
+for this wrapper from the plugin it calls. However, you can use the --
+option to deliniate the wrapped plugin if you need to re(-use) any of the
+options defined in this wrapper and they're not passed through correctly.
+";
+}
+
+my @manipulations;
+my $opt_s = 0;
+my $opt_t = 11;
+
+Getopt::Long::Configure('require_order', 'pass_through');
+GetOptions(
+    'manipulation|m=s@' => \@manipulations,
+    'timeout|t=i'     => \$opt_t,
+    'substitute|s'    => \$opt_s,
+    'help|h'          => sub {print_help(); exit $ERRORS{'OK'}; },
+    'usage|?'         => sub { print_usage(); exit $ERRORS{'UNKNOWN'}; },
+);
+
+alarm $opt_t;
+my $pid = open3(undef, my $chld_out, '>&STDERR', @ARGV);
+
+my $raw_output;
+{
+    # don't redfine $/ globally
+    local $/ = undef;
+    $raw_output = <$chld_out>;
+}
+my ($output, $perfdata) = split(m/\|([^|]+)$/, $raw_output);
+chomp($output); chomp($perfdata);
+waitpid( $pid, 0 );
+my $child_exit_status = $? >> 8;
+
+foreach my $manipulation (@manipulations) {
+    my ($regex, $orig, $new) = split(m/:/, $manipulation, 3);
+    # normalisation
+    $regex = qr/$regex/; $orig = uc($orig); $new = uc($new);
+    $orig = $SHORTTOLONG{$orig} if exists($SHORTTOLONG{$orig});
+    $new = $SHORTTOLONG{$new} if exists($SHORTTOLONG{$new});
+    
+    if ($output =~ m/$regex/) {
+        if ($child_exit_status eq $ERRORS{$orig}) {
+            $child_exit_status = $ERRORS{$new};
+            if ($opt_s) {
+                $output =~ s/\b\Q$orig\E\b/$new/;
+            }
+        }
+    }
+}
+
+print $output;
+print '|' . $perfdata if $perfdata;
+print "\n";
+
+exit $child_exit_status;
