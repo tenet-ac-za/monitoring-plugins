@@ -41,6 +41,7 @@ my $c = Config::YAML->new(
     metadataURL => '',
     disableContacts => [],
     allow401Auth => [],
+    authFieldsOverride => { 'https://example.ac.za/shibboleth' => { 'userField' => 'username', 'passField' => 'password', 'orgField' => 'organization' }},
     tokenKey => 'changeme',
 );
 GetOptions($c,
@@ -237,6 +238,12 @@ foreach my $entity ($entities->get_nodelist) {
     printf $nagConf "  contact_groups                 samlmd-cg-%s\n", $primaryScope;
     printf $nagConf "  display_name                   IdP: %s\n", $displayScope;
     printf $nagConf "  _ALLOWAUTH401                  %d\n", ($entityID ~~ $c->{'allow401Auth'}) ? 1 : 0;
+    my @ufo = grep { $_->{'entityID'} eq $entityID } @{$c->{'authFieldsOverride'}};
+    if (@ufo) {
+        printf $nagConf "  _USERFIELD                     %s\n", $ufo[0]->{'userField'} if defined $ufo[0]->{'userField'};
+        printf $nagConf "  _PASSFIELD                     %s\n", $ufo[0]->{'passField'} if defined $ufo[0]->{'passField'};
+        printf $nagConf "  _ORGFIELD                      %s\n", $ufo[0]->{'passField'} if defined $ufo[0]->{'passField'};
+    }
     printf $nagConf "  _BIRKIFIEDENTITYID             %s\n", $birkifiedEntityID if defined $c->{'birkURL'};
     printf $nagConf "  _CERTINFO                      %s\n", join('|', @certs) if @certs;
     printf $nagConf "  _ENTITYID                      %s\n", $entityID;
@@ -351,6 +358,14 @@ A list of email addresses that should never receive notifications.
 
 A list of entityIDs that are allowed to generate a 401 Authorization Required response rather than 200 OK with a username field.
 
+=item B<additionalContacts>
+
+A list of contacts (keyed by entityID) to merge into the contacts from metadata
+
+=item B<authOverrideFields>
+
+A list of overrides (keyed by entityID) to apply to the username/password/organisation matching fields
+
 =back
 
 =head2 SAMPLE CONFIG
@@ -368,6 +383,18 @@ A list of entityIDs that are allowed to generate a 401 Authorization Required re
  
  allow401Auth:
   - http://example.ac.za/shibboleth
+ 
+ additionalContacts:
+  - entityID: http://example.ac.za/shibboleth
+    givenName: Josiah
+    sn: Carberry
+    mail: josiah@example.ac.za
+
+ authOverrideFields:
+  - entityID: http://example.ac.za/shibboleth
+    userField: username
+    passField: password
+    orgField: organization
 
 =head1 LICENSE
 
