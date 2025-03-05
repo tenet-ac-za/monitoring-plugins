@@ -47,7 +47,7 @@ sub tokenEmail($$)
     my ($token, $key) = @_;
     my $cleartext;
     eval {
-        my $cipher = Crypt::CBC->new(-key => $key, -cipher => 'DES');
+        my $cipher = Crypt::CBC->new(-key => $key, -cipher => 'DES', -pbkdf=>'pbkdf2');
         $cleartext = $cipher->decrypt(
             MIME::Base64::URLSafe::decode($token)
         );
