@@ -41,6 +41,7 @@ my $c = Config::YAML->new(
     metadataURL => '',
     disableContacts => [],
     allow401Auth => [],
+    excludeEntities => [],
     authFieldsOverride => { 'https://example.ac.za/shibboleth' => { 'userField' => 'username', 'passField' => 'password', 'orgField' => 'organization' }},
     tokenKey => 'changeme',
 );
@@ -127,6 +128,7 @@ my %seenScopes = ();
 # Iterate through the entities
 foreach my $entity ($entities->get_nodelist) {
     my $entityID = $entity->getAttribute('entityID');
+    next if grep { $_ eq $entityID } @{$c->{'excludeEntities'}};
     unless ($xp->find('md:IDPSSODescriptor', $entity)) {
         printf(STDERR "Skipping %s, not an <md:IDPSSODescriptor>\n", $entityID);
         next;
@@ -365,6 +367,10 @@ A list of contacts (keyed by entityID) to merge into the contacts from metadata
 =item B<authOverrideFields>
 
 A list of overrides (keyed by entityID) to apply to the username/password/organisation matching fields
+
+=item b<excludeEntities>
+
+A list of entityIDs that should be completely excluded from monitoring.
 
 =back
 
