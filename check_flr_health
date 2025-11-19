@@ -7,6 +7,7 @@ use strict;
 use warnings;
 use Monitoring::Plugin;
 use IPC::Open3;
+use Time::HiRes qw(time);
 
 my $np = Monitoring::Plugin->new(
     'usage' => 'Usage: %s [ -v|--verbose ] -H <host> -S <secret> [-p <port>] [-t <timeout>]',
@@ -39,6 +40,7 @@ $np->getopts;
 
 my $af_inet = $np->opts->ipv6 ? '-6' : ($np->opts->ipv4 ? '-4' : '--');
 
+our $startTime = time();
 alarm $np->opts->timeout;
 my $pid = open3(\*CHLD_IN, \*CHLD_OUT, undef, '/usr/bin/radclient', '-x', '-t', $np->opts->timeout, $af_inet, $np->opts->host . ':' . $np->opts->port, 'auth', $np->opts->secret);
 
@@ -46,6 +48,7 @@ printf CHLD_IN "User-Name = \"%s\"\n", $np->opts->user;
 printf CHLD_IN "Message-Authenticator = 0x00\n";
 close(CHLD_IN);
 
+my ($code, $message) = ('CRITICAL', 'No valid response received');
 while (<CHLD_OUT>) {
     next unless m/Reply-Message\s*=\s*["'](.*)["']$/;
     my $response = $1;
@@ -56,9 +59,11 @@ while (<CHLD_OUT>) {
             $np->add_message(WARNING, "failed to match: " . $np->opts->regex);
         }
     }
-    my ($code, $message) = $np->check_messages();
-    $np->plugin_exit($code, $message);
+    ($code, $message) = $np->check_messages();
+    last;
 }
 waitpid( $pid, 0 );
 
-$np->plugin_exit(CRITICAL, 'No valid response received');
+$np->add_perfdata('label' => 'rtt', 'value' => sprintf("%0.2f", time() - $startTime), 'uom' => 's', 'min' => 0, 'max' => $np->opts->timeout);
+$np->add_perfdata('label' => 'state', 'value' => $code, 'min' => 0, 'max' => 4);
+$np->plugin_exit($code, $message);
