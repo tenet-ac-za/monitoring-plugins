@@ -60,7 +60,7 @@ sub recurseRedirects($$$;$$)
 
     if ($req->method eq 'POST') {
         $req->header('Content-Type' => 'application/x-www-form-urlencoded');
-        $req->content($postdata)    
+        $req->content($postdata)
     }
 
     print STDERR 'Phase ' . $phase . ': Request ' . $req->as_string . "\n" if $np->opts->verbose;
@@ -166,10 +166,12 @@ if ($np->opts->certificate && $np->opts->metadatacertinfo) {
             $np->add_message(CRITICAL,  sprintf("SAML certificate '%s' from metadata has EXPIRED. Users may not be able to authenticate. (%s)", $subject, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
         } elsif ($critical && $critical >= $daysLeft) {
             $np->add_message(CRITICAL,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
-        $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
+            $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
         } elsif ($warning && $warning >= $daysLeft) {
             $np->add_message(WARNING,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
-        $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
+            $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
+        } else {
+            $np->add_message(OK, sprintf("SAML certificate '%s' from metadata expires at %s.", $subject, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
         }
     }
 }
