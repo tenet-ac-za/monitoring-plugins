@@ -27,9 +27,9 @@ sub SSL_verify_callback
         my $daysLeft = int((str2time($notAfter) - $main::startTime)/86400);
         my $subject =  Net::SSLeay::X509_NAME_get_text_by_NID(Net::SSLeay::X509_get_subject_name($cert), &Net::SSLeay::NID_commonName);
         if ($critical && $critical >= $daysLeft) {
-            $main::np->add_message(CRITICAL,  sprintf("SSL certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+            $main::np->add_message(CRITICAL,  sprintf("SSL (webserver) certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         } elsif ($warning && $warning >= $daysLeft) {
-            $main::np->add_message(WARNING,  sprintf("SSL certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+            $main::np->add_message(WARNING,  sprintf("SSL (webserver) certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         }
     }
     return 1;
@@ -159,7 +159,10 @@ our $startTime = time();
 if ($np->opts->certificate && $np->opts->metadatacertinfo) {
     my ($warning,$critical) = split /,/, $np->opts->certificate;
     $critical = $warning unless defined ($critical);
-    foreach my $cert (split /\|/, $np->opts->metadatacertinfo) {
+    my @certs = split /\|/, $np->opts->metadatacertinfo;
+    for (my $i = 0; $i <= $#certs; $i++) {
+        my $cert = $certs[$i];
+        my $newline = $i == $#certs ? "\n" : '';
         my ($notAfter, $subject) = split /\//, $cert;
         my $daysLeft = int(($notAfter - $startTime)/86400);
         if ($daysLeft <= 0) {
@@ -171,7 +174,7 @@ if ($np->opts->certificate && $np->opts->metadatacertinfo) {
             $np->add_message(WARNING,  sprintf("SAML certificate '%s' from metadata expires in %d day(s) (%s).", $subject, $daysLeft, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
             $np->add_message(WARNING, $np->opts->renewinfo) if $np->opts->renewinfo;
         } else {
-            $np->add_message(OK, sprintf("SAML certificate '%s' from metadata expires at %s.", $subject, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))));
+            $np->add_message(OK, sprintf("SAML certificate '%s' from metadata expires at %s.", $subject, POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($notAfter))) . $newline);
         }
     }
 }
