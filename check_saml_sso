@@ -19,10 +19,10 @@ our $VERSION = '0.3';
 # verify the certificate date
 sub SSL_verify_callback
 {
+    my ($ok, $store, $certstring, $err, $cert, $depth) = @_;
     if ($main::np->opts->certificate) {
         my ($warning,$critical) = split /,/, $main::np->opts->certificate;
         $critical = $warning unless defined ($critical);
-        my $cert = $_[4];
         my $notAfter = Net::SSLeay::P_ASN1_TIME_get_isotime(Net::SSLeay::X509_get_notAfter($cert));
         my $daysLeft = int((str2time($notAfter) - $main::startTime)/86400);
         my $subject =  Net::SSLeay::X509_NAME_get_text_by_NID(Net::SSLeay::X509_get_subject_name($cert), &Net::SSLeay::NID_commonName);
@@ -30,9 +30,11 @@ sub SSL_verify_callback
             $main::np->add_message(CRITICAL,  sprintf("SSL (webserver) certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
         } elsif ($warning && $warning >= $daysLeft) {
             $main::np->add_message(WARNING,  sprintf("SSL (webserver) certificate '%s' expires in %d day(s) (%s).", $subject, $daysLeft, $notAfter));
+        } elsif (!$ok) {
+            $main::np->add_message(WARNING, sprintf("SSL (webserver) certificate '%s' fails validation: %s.", $subject, $err));
         }
     }
-    return 1;
+    return 1; # ignore validation errors since we're just checking expiry here (and may be using self-signed certs)
 }
 
 sub cleanURI($)
