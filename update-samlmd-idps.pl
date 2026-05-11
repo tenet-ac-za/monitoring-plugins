@@ -6,7 +6,6 @@
 use strict;
 use warnings;
 use 5.10.0;
-use experimental 'smartmatch';
 use Getopt::Long;
 use Pod::Usage;
 use LWP::UserAgent;
@@ -214,7 +213,7 @@ foreach my $entity ($entities->get_nodelist) {
         printf $nagConf "  contactgroups                  samlmd-cg-%s\n", $primaryScope;
         printf $nagConf "  email                          %s\n", $mail;
         # Disable contacts that were excluded
-        if ($mail ~~ $c->{disableContacts}) { # smartmatch
+        if (grep { $_ eq $mail } @{$c->{disableContacts}}) {
             print  $nagConf "  host_notification_options      n\n";
             print  $nagConf "  host_notifications_enabled     0\n";
             print  $nagConf "  service_notification_options   n\n";
@@ -239,7 +238,7 @@ foreach my $entity ($entities->get_nodelist) {
     print  $nagConf "  use                            samlmd-generated-idp\n";
     printf $nagConf "  contact_groups                 samlmd-cg-%s\n", $primaryScope;
     printf $nagConf "  display_name                   IdP: %s\n", $displayScope;
-    printf $nagConf "  _ALLOWAUTH401                  %d\n", ($entityID ~~ $c->{'allow401Auth'}) ? 1 : 0;
+    printf $nagConf "  _ALLOWAUTH401                  %d\n", (grep { $_ eq $entityID } @{$c->{'allow401Auth'}}) ? 1 : 0;
     my @ufo = grep { $_->{'entityID'} eq $entityID } @{$c->{'authFieldsOverride'}};
     if (@ufo) {
         printf $nagConf "  _USERFIELD                     %s\n", $ufo[0]->{'userField'} if defined $ufo[0]->{'userField'};
@@ -386,10 +385,10 @@ A list of entityIDs that should be completely excluded from monitoring.
 
  disableContacts:
   - user@example.ac.za
- 
+
  allow401Auth:
   - http://example.ac.za/shibboleth
- 
+
  additionalContacts:
   - entityID: http://example.ac.za/shibboleth
     givenName: Josiah
